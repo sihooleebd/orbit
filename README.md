@@ -1,9 +1,10 @@
+```
    ____  ____  ____  __________
   / __ \/ __ \/ __ )/  _/_  __/
  / / / / /_/ / __  |/ /  / /   
 / /_/ / _, _/ /_/ // /  / /    
 \____/_/ |_/_____/___/ /_/     
-                               
+```                               
 # ◈ Orbit
 
 A beautiful local **MP3 player TUI** with **buckets** (playlists you dump into the
