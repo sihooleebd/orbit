@@ -1286,6 +1286,7 @@ dependencies = [
  "rodio",
  "serde",
  "serde_json",
+ "unicode-width",
  "walkdir",
 ]
 

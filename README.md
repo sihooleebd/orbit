@@ -89,14 +89,18 @@ Buckets are alive, not just static lists:
 - Focus the Buckets pane and it **splits top/bottom**, previewing the tracks in the
   highlighted bucket below the list.
 
-**Library & EQ** — `A` browse for a folder · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `?` help · `q` quit
+**Library & EQ** — `A` manage folders · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `?` help · `q` quit
 
-### File browser (`A`)
+### Manage folders (`A`)
 
-A built-in directory explorer (musikcube-style) for adding library folders — no
-typing paths. `↑↓` move · `Enter`/`→` open a folder · `⌫`/`←` go up · `.` toggle
-hidden folders · `a` add the highlighted folder (or the current one when `..` is
-selected) · `Esc` cancel. A line at the bottom always shows exactly what `a` will add.
+A hub for your library roots: it lists every watched folder and lets you
+`a` add one · `x` remove the selected one (rescans automatically) · `r` rescan ·
+`Esc` close.
+
+Adding opens a built-in directory explorer (musikcube-style) — no typing paths.
+`↑↓` move · `Enter`/`→` open a folder · `⌫`/`←` go up · `.` toggle hidden folders ·
+`a` add the highlighted folder (or the current one when `..` is selected) · `Esc`
+back. A line at the bottom always shows exactly what `a` will add.
 
 ### Zen mode (`z`)
 

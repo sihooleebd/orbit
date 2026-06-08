@@ -6,6 +6,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::app::{App, Focus, InputKind, Mode};
 use crate::audio::{BAND_LABELS, NUM_BANDS, PRESETS};
 use crate::model::fmt_duration;
@@ -42,6 +44,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Input(_) => draw_input(f, area, app),
         Mode::PickBucket { .. } => draw_pick(f, area, app),
         Mode::FileBrowser => draw_browser(f, area, app),
+        Mode::ManageFolders => draw_manage(f, area, app),
         Mode::Normal => {}
     }
 }
@@ -104,6 +107,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::Input(_) => "type · Enter confirm · Esc cancel",
         Mode::PickBucket { .. } => "↑↓ pick · n new bucket · Enter add · Esc cancel",
         Mode::FileBrowser => "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel",
+        Mode::ManageFolders => "↑↓ move · a add · x remove · r rescan · Esc close",
         Mode::Normal => {
             "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
         }
@@ -471,11 +475,10 @@ fn draw_now_playing(f: &mut Frame, area: Rect, app: &App) {
             let bold = Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD);
             let mut spans = vec![Span::styled(format!("{icon} "), Style::new().fg(icon_color))];
             match track.album_opt() {
-                Some(album) if title_w > album.chars().count() + 2 => {
-                    let left_max = title_w - album.chars().count() - 1;
+                Some(album) if title_w > dw(album) + 2 => {
+                    let left_max = title_w - dw(album) - 1;
                     let left_t = truncate(&left_full, left_max);
-                    let gap =
-                        title_w.saturating_sub(left_t.chars().count() + album.chars().count());
+                    let gap = title_w.saturating_sub(dw(&left_t) + dw(album));
                     spans.push(Span::styled(left_t, bold));
                     spans.push(Span::raw(" ".repeat(gap)));
                     spans.push(Span::styled(album.to_string(), Style::new().fg(theme::dim())));
@@ -924,7 +927,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key(""), desc("smart buckets (↻ ★ ◷) fill themselves")]),
         Line::from(""),
         head("LIBRARY & EQ"),
-        Line::from(vec![key("A / R"), desc("add folder / rescan")]),
+        Line::from(vec![key("A / R"), desc("manage library folders / rescan")]),
         Line::from(vec![key("e"), desc("open equalizer (x enables it inside)")]),
         Line::from(vec![key("E"), desc("toggle EQ on/off")]),
         Line::from(vec![key("z"), desc("zen mode (full-screen player + spectrum)")]),
@@ -1007,6 +1010,69 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {
+    let rect = centered_rect(
+        72,
+        (app.config.roots.len() as u16 + 6).clamp(8, 22),
+        area,
+    );
+    f.render_widget(Clear, rect);
+    let block = overlay_block("MANAGE LIBRARY FOLDERS");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let inner_w = inner.width.saturating_sub(2) as usize;
+
+    if app.config.roots.is_empty() {
+        f.render_widget(
+            Paragraph::new("No folders yet — press 'a' to add one.")
+                .style(Style::new().fg(theme::dim()).bg(theme::panel_bg())),
+            rows[0],
+        );
+    } else {
+        let items: Vec<ListItem> = app
+            .config
+            .roots
+            .iter()
+            .map(|p| {
+                ListItem::new(Line::from(vec![
+                    Span::styled("▸ ", Style::new().fg(theme::accent2())),
+                    Span::styled(
+                        truncate(&p.display().to_string(), inner_w.saturating_sub(2)),
+                        Style::new().fg(theme::fg()),
+                    ),
+                ]))
+            })
+            .collect();
+        let list = List::new(items)
+            .highlight_style(
+                Style::new()
+                    .bg(theme::select_bg())
+                    .fg(theme::accent())
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌ ")
+            .style(Style::new().bg(theme::panel_bg()));
+        f.render_stateful_widget(list, rows[0], &mut app.folders_state);
+    }
+
+    let hint = Line::from(vec![
+        Span::styled(" a ", Style::new().fg(theme::accent())),
+        Span::styled("add   ", Style::new().fg(theme::dim())),
+        Span::styled("x ", Style::new().fg(theme::accent())),
+        Span::styled("remove   ", Style::new().fg(theme::dim())),
+        Span::styled("r ", Style::new().fg(theme::accent())),
+        Span::styled("rescan   ", Style::new().fg(theme::dim())),
+        Span::styled("Esc ", Style::new().fg(theme::accent())),
+        Span::styled("close", Style::new().fg(theme::dim())),
+    ]);
+    f.render_widget(
+        Paragraph::new(hint).style(Style::new().bg(theme::panel_bg())),
+        rows[1],
+    );
 }
 
 fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
@@ -1269,29 +1335,44 @@ fn draw_eq_graph(f: &mut Frame, area: Rect, app: &App) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn truncate(s: &str, max: usize) -> String {
-    let count = s.chars().count();
-    if count <= max {
-        s.to_string()
-    } else if max <= 1 {
-        "…".to_string()
-    } else {
-        let mut out: String = s.chars().take(max - 1).collect();
-        out.push('…');
-        out
-    }
+/// Display width in terminal columns (CJK/wide chars count as 2).
+fn dw(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
 }
 
-/// Left text + right text padded to `width`, truncating the left if needed.
+/// Truncate `s` to at most `max` display columns, appending `…` if cut.
+fn truncate(s: &str, max: usize) -> String {
+    if dw(s) <= max {
+        return s.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let budget = max - 1; // leave a column for the ellipsis
+    let mut out = String::new();
+    let mut w = 0;
+    for ch in s.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > budget {
+            break;
+        }
+        out.push(ch);
+        w += cw;
+    }
+    out.push('…');
+    out
+}
+
+/// Left text + right text padded to `width` display columns, truncating the
+/// left if needed. Uses display width so CJK/wide titles stay aligned.
 fn pad_between(left: &str, right: &str, width: usize) -> String {
-    let rlen = right.chars().count();
-    if width <= rlen + 1 {
+    let rw = dw(right);
+    if width <= rw + 1 {
         return truncate(left, width);
     }
-    let left_max = width - rlen - 1;
+    let left_max = width - rw - 1;
     let left_t = truncate(left, left_max);
-    let used = left_t.chars().count() + rlen;
-    let gap = width.saturating_sub(used);
+    let gap = width.saturating_sub(dw(&left_t) + rw);
     format!("{left_t}{}{right}", " ".repeat(gap))
 }
 

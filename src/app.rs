@@ -80,6 +80,7 @@ pub enum Mode {
     Input(Input),
     PickBucket { track: Track },
     FileBrowser,
+    ManageFolders,
 }
 
 /// A directory browser for picking a library folder (musikcube-style).
@@ -182,6 +183,8 @@ pub struct App {
     /// Active directory browser (when in `Mode::FileBrowser`).
     pub browser: Option<FileBrowser>,
     pub fs_state: ListState,
+    /// Selection state for the Manage Folders overlay.
+    pub folders_state: ListState,
 
     /// Synced lyrics for the current track, if a .lrc sidecar exists.
     pub lyrics: Option<crate::media::Lyrics>,
@@ -241,6 +244,7 @@ impl App {
             zen: false,
             browser: None,
             fs_state: ListState::default(),
+            folders_state: ListState::default(),
             lyrics: None,
         };
 
@@ -889,8 +893,93 @@ impl App {
             }
         };
         self.browser = None;
-        self.mode = Mode::Normal;
-        self.add_root(path);
+        self.add_root(path.clone());
+        // Return to the folder manager with the (new) root selected.
+        self.mode = Mode::ManageFolders;
+        if !self.config.roots.is_empty() {
+            let sel = self
+                .config
+                .roots
+                .iter()
+                .position(|r| *r == path)
+                .unwrap_or(self.config.roots.len() - 1);
+            self.folders_state.select(Some(sel));
+        }
+    }
+
+    // -- manage folders ----------------------------------------------------
+
+    fn open_manage_folders(&mut self) {
+        if self.config.roots.is_empty() {
+            self.folders_state.select(None);
+        } else {
+            let sel = self
+                .folders_state
+                .selected()
+                .unwrap_or(0)
+                .min(self.config.roots.len() - 1);
+            self.folders_state.select(Some(sel));
+        }
+        self.mode = Mode::ManageFolders;
+        self.set_status("Manage folders — a add · x remove · r rescan · Esc close.");
+    }
+
+    fn remove_selected_root(&mut self) {
+        let Some(idx) = self.folders_state.selected() else {
+            return;
+        };
+        if idx >= self.config.roots.len() {
+            return;
+        }
+        let removed = self.config.roots.remove(idx);
+        self.config.save().ok();
+        let len = self.config.roots.len();
+        if len == 0 {
+            self.folders_state.select(None);
+        } else {
+            self.folders_state.select(Some(idx.min(len - 1)));
+        }
+        if self.config.roots.is_empty() {
+            // Nothing left to scan — clear the library.
+            self.scan_rx = None;
+            self.scanning = false;
+            self.library.tracks.clear();
+            self.library.finalize();
+            self.lib_state.select(None);
+            self.recompute_smart();
+            self.set_status(format!("Removed {} — library cleared.", removed.display()));
+        } else {
+            self.set_status(format!("Removed {} — rescanning…", removed.display()));
+            self.start_scan();
+        }
+    }
+
+    fn handle_manage_folders_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => {
+                let len = self.config.roots.len();
+                if len > 0 {
+                    let cur = self.folders_state.selected().unwrap_or(0);
+                    self.folders_state.select(Some(cur.saturating_sub(1)));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let len = self.config.roots.len();
+                if len > 0 {
+                    let cur = self.folders_state.selected().unwrap_or(0);
+                    self.folders_state.select(Some((cur + 1).min(len - 1)));
+                }
+            }
+            KeyCode::Char('a') => self.open_file_browser(),
+            KeyCode::Char('x') | KeyCode::Char('d') | KeyCode::Delete => {
+                self.remove_selected_root()
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.start_scan();
+            }
+            _ => {}
+        }
     }
 
     // -- key handling ------------------------------------------------------
@@ -911,6 +1000,7 @@ impl App {
             Mode::Help => self.handle_help_key(key),
             Mode::Eq => self.handle_eq_key(key),
             Mode::FileBrowser => self.handle_browser_key(key),
+            Mode::ManageFolders => self.handle_manage_folders_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1013,7 +1103,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.browser = None;
-                self.mode = Mode::Normal;
+                self.mode = Mode::ManageFolders;
             }
             KeyCode::Up | KeyCode::Char('k') => self.browser_move(-1),
             KeyCode::Down | KeyCode::Char('j') => self.browser_move(1),
@@ -1171,7 +1261,7 @@ impl App {
                 }
             }
             KeyCode::Char('a') => self.add_selected_to_bucket(),
-            KeyCode::Char('A') => self.open_file_browser(),
+            KeyCode::Char('A') => self.open_manage_folders(),
             KeyCode::Char('/') => {
                 self.mode = Mode::Input(Input {
                     kind: InputKind::Search,
