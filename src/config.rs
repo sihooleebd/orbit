@@ -25,6 +25,8 @@ pub struct Config {
     pub shuffle: bool,
     /// Index of the active colour palette.
     pub palette: usize,
+    /// Zen visualizer: 0 = spectrum, 1 = cassette.
+    pub zen_viz: usize,
 }
 
 impl Default for Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             repeat: 0,
             shuffle: false,
             palette: 0,
+            zen_viz: 0,
         }
     }
 }

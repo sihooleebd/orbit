@@ -11,7 +11,7 @@ use ratatui::widgets::ListState;
 use crate::audio::{Engine, EqShared, MAX_GAIN_DB, NUM_BANDS, PRESETS};
 use crate::bucket::BucketStore;
 use crate::config::{self, Config};
-use crate::library::{self, Library};
+use crate::library::{self, LibEntry, Library};
 use crate::model::Track;
 use crate::queue::{Queue, RepeatMode};
 use crate::stats::Stats;
@@ -21,6 +21,43 @@ pub enum Focus {
     Library,
     Buckets,
     Queue,
+}
+
+/// The zen-mode visualizer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZenViz {
+    Spectrum,
+    Cassette,
+}
+
+impl ZenViz {
+    pub fn from_usize(v: usize) -> Self {
+        match v {
+            1 => ZenViz::Cassette,
+            _ => ZenViz::Spectrum,
+        }
+    }
+
+    pub fn as_usize(self) -> usize {
+        match self {
+            ZenViz::Spectrum => 0,
+            ZenViz::Cassette => 1,
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            ZenViz::Spectrum => ZenViz::Cassette,
+            ZenViz::Cassette => ZenViz::Spectrum,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ZenViz::Spectrum => "spectrum",
+            ZenViz::Cassette => "cassette",
+        }
+    }
 }
 
 impl Focus {
@@ -68,6 +105,14 @@ pub enum BucketRow {
     User(usize),
 }
 
+/// A pending destructive action awaiting confirmation.
+#[derive(Clone)]
+pub enum ConfirmAction {
+    DeleteBucket(usize),
+    ClearQueue,
+    RemoveFolder(usize),
+}
+
 #[derive(Clone)]
 pub struct Input {
     pub kind: InputKind,
@@ -86,7 +131,10 @@ pub enum Mode {
     /// Viewing/editing the tracks inside a bucket.
     BucketView(BucketRow),
     About,
+    /// A yes/no confirmation for a destructive action.
+    Confirm { prompt: String, action: ConfirmAction },
 }
+
 
 /// A directory browser for picking a library folder (musikcube-style).
 pub struct FileBrowser {
@@ -184,6 +232,8 @@ pub struct App {
 
     /// Zen mode: hide all panels and show only the full-screen player.
     pub zen: bool,
+    /// Which zen visualizer is active.
+    pub zen_viz: ZenViz,
 
     /// Active directory browser (when in `Mode::FileBrowser`).
     pub browser: Option<FileBrowser>,
@@ -216,15 +266,18 @@ impl App {
             }
         }
 
-        let library = Library::new(library::load_cache());
+        let mut library = Library::new(library::load_cache());
+        library.set_roots(config.roots.clone());
         let store = BucketStore::load();
         let queue = Queue::new(RepeatMode::from_u8(config.repeat), config.shuffle);
         let stats = Stats::load();
 
         let mut lib_state = ListState::default();
-        if library.view_len() > 0 {
+        if library.entries_len() > 0 {
             lib_state.select(Some(0));
         }
+
+        let config_zen_viz = config.zen_viz;
 
         let mut app = Self {
             config,
@@ -252,6 +305,7 @@ impl App {
             spinner_frame: 0,
             should_quit: false,
             zen: false,
+            zen_viz: ZenViz::from_usize(config_zen_viz),
             browser: None,
             fs_state: ListState::default(),
             folders_state: ListState::default(),
@@ -376,7 +430,8 @@ impl App {
             return;
         }
         self.library.tracks.clear();
-        self.library.rebuild_view();
+        self.library.set_roots(self.config.roots.clone());
+        self.library.reset_nav();
         self.scan_count = 0;
         self.scanning = true;
         self.scan_rx = Some(library::spawn_scan(self.config.roots.clone()));
@@ -407,14 +462,14 @@ impl App {
                 }
             }
             self.library.rebuild_view();
-            if self.lib_state.selected().is_none() && self.library.view_len() > 0 {
+            if self.lib_state.selected().is_none() && self.library.entries_len() > 0 {
                 self.lib_state.select(Some(0));
             }
             if done {
                 self.scanning = false;
                 self.scan_rx = None;
                 self.library.finalize();
-                if self.lib_state.selected().is_none() && self.library.view_len() > 0 {
+                if self.lib_state.selected().is_none() && self.library.entries_len() > 0 {
                     self.lib_state.select(Some(0));
                 }
                 self.recompute_smart();
@@ -587,7 +642,7 @@ impl App {
 
     fn focused_len(&self) -> usize {
         match self.focus {
-            Focus::Library => self.library.view_len(),
+            Focus::Library => self.library.entries_len(),
             Focus::Buckets => self.bucket_rows_len(),
             Focus::Queue => self.queue.len(),
         }
@@ -625,7 +680,10 @@ impl App {
 
     fn selected_library_track(&self) -> Option<Track> {
         let row = self.lib_state.selected()?;
-        self.library.track_at_view(row).cloned()
+        match self.library.entry_at(row)? {
+            LibEntry::Track(i) => self.library.track(*i).cloned(),
+            _ => None,
+        }
     }
 
     fn selected_bucket_row(&self) -> Option<BucketRow> {
@@ -646,11 +704,7 @@ impl App {
 
     fn activate(&mut self) {
         match self.focus {
-            Focus::Library => {
-                if let Some(track) = self.selected_library_track() {
-                    self.enqueue_and_play(track);
-                }
-            }
+            Focus::Library => self.activate_library(),
             Focus::Buckets => self.dump_selected_bucket(),
             Focus::Queue => {
                 if let Some(idx) = self.selected_queue_index() {
@@ -658,6 +712,43 @@ impl App {
                     self.play_current_in_queue();
                 }
             }
+        }
+    }
+
+    /// Enter on a library row: descend folders, go up via "..", or play a track.
+    fn activate_library(&mut self) {
+        let Some(row) = self.lib_state.selected() else {
+            return;
+        };
+        enum Act {
+            Up,
+            Enter(PathBuf),
+            Play(Track),
+            None,
+        }
+        let act = match self.library.entry_at(row) {
+            Some(LibEntry::Parent) => Act::Up,
+            Some(LibEntry::Folder { path, .. }) => Act::Enter(path.clone()),
+            Some(LibEntry::Track(i)) => self
+                .library
+                .track(*i)
+                .cloned()
+                .map(Act::Play)
+                .unwrap_or(Act::None),
+            None => Act::None,
+        };
+        match act {
+            Act::Up => {
+                self.library.go_up();
+                self.lib_state.select(Some(0));
+            }
+            Act::Enter(path) => {
+                self.library.enter(path);
+                self.lib_state
+                    .select(if self.library.entries_len() > 0 { Some(0) } else { None });
+            }
+            Act::Play(track) => self.enqueue_and_play(track),
+            Act::None => {}
         }
     }
 
@@ -690,16 +781,11 @@ impl App {
         self.set_status(format!("Dumped {count} tracks from “{name}” into the queue."));
     }
 
-    /// Dump the whole library (respecting the current search filter) into the queue.
+    /// Dump the current library scope (folder/filter, or everything) into the queue.
     fn dump_library(&mut self) {
-        let tracks: Vec<Track> = self
-            .library
-            .view
-            .iter()
-            .filter_map(|&i| self.library.tracks.get(i).cloned())
-            .collect();
+        let tracks = self.library.scoped_tracks();
         if tracks.is_empty() {
-            self.set_status("Library is empty.");
+            self.set_status("Nothing here to dump.");
             return;
         }
         let was_empty = self.queue.is_empty();
@@ -709,10 +795,12 @@ impl App {
             self.queue.jump_to(0);
             self.play_current_in_queue();
         }
-        let scope = if self.library.filter().is_empty() {
-            "the library"
+        let scope = if !self.library.filter().is_empty() {
+            "the filtered results".to_string()
+        } else if let Some(name) = self.library.cwd_label() {
+            format!("“{name}”")
         } else {
-            "the filtered results"
+            "the library".to_string()
         };
         self.set_status(format!("Dumped {count} tracks from {scope} into the queue."));
     }
@@ -851,26 +939,38 @@ impl App {
         self.mode = Mode::Normal;
     }
 
+    /// Ask before deleting the selected user bucket.
     fn delete_selected_bucket(&mut self) {
         match self.selected_bucket_row() {
             Some(BucketRow::User(i)) => {
                 let name = self.store.buckets[i].name.clone();
-                self.store.delete(i);
-                self.store.save();
-                let rows = self.bucket_rows_len();
-                if rows == 0 {
-                    self.bucket_state.select(None);
-                } else {
-                    let cur = self.bucket_state.selected().unwrap_or(0);
-                    self.bucket_state.select(Some(cur.min(rows - 1)));
-                }
-                self.set_status(format!("Deleted bucket “{name}”."));
+                self.confirm(
+                    format!("Delete bucket “{name}”?"),
+                    ConfirmAction::DeleteBucket(i),
+                );
             }
             Some(BucketRow::Smart(_)) => {
                 self.set_status("Smart buckets are automatic — they can't be deleted.");
             }
             None => {}
         }
+    }
+
+    fn do_delete_bucket(&mut self, i: usize) {
+        if i >= self.store.len() {
+            return;
+        }
+        let name = self.store.buckets[i].name.clone();
+        self.store.delete(i);
+        self.store.save();
+        let rows = self.bucket_rows_len();
+        if rows == 0 {
+            self.bucket_state.select(None);
+        } else {
+            let cur = self.bucket_state.selected().unwrap_or(0);
+            self.bucket_state.select(Some(cur.min(rows - 1)));
+        }
+        self.set_status(format!("Deleted bucket “{name}”."));
     }
 
     // -- queue edits -------------------------------------------------------
@@ -900,6 +1000,14 @@ impl App {
         }
     }
 
+    fn request_clear_queue(&mut self) {
+        if self.queue.is_empty() {
+            self.set_status("Queue is already empty.");
+        } else {
+            self.confirm("Clear the entire queue?".to_string(), ConfirmAction::ClearQueue);
+        }
+    }
+
     fn clear_queue(&mut self) {
         self.queue.clear();
         self.queue_state.select(None);
@@ -909,6 +1017,42 @@ impl App {
         self.update_remote();
         self.expect_playing = false;
         self.set_status("Queue cleared.");
+    }
+
+    // -- confirmation ------------------------------------------------------
+
+    fn confirm(&mut self, prompt: String, action: ConfirmAction) {
+        self.mode = Mode::Confirm { prompt, action };
+    }
+
+    /// Where to return after a confirm dialog resolves.
+    fn confirm_return_mode(action: &ConfirmAction) -> Mode {
+        match action {
+            ConfirmAction::RemoveFolder(_) => Mode::ManageFolders,
+            _ => Mode::Normal,
+        }
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent) {
+        let action = match &self.mode {
+            Mode::Confirm { action, .. } => action.clone(),
+            _ => return,
+        };
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                self.mode = Self::confirm_return_mode(&action);
+                match action {
+                    ConfirmAction::DeleteBucket(i) => self.do_delete_bucket(i),
+                    ConfirmAction::ClearQueue => self.clear_queue(),
+                    ConfirmAction::RemoveFolder(i) => self.do_remove_root(i),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.mode = Self::confirm_return_mode(&action);
+                self.set_status("Cancelled.");
+            }
+            _ => {}
+        }
     }
 
     // -- modes / playback toggles -----------------------------------------
@@ -1115,10 +1259,21 @@ impl App {
         self.set_status("Manage folders — a add · x remove · r rescan · Esc close.");
     }
 
-    fn remove_selected_root(&mut self) {
+    fn request_remove_root(&mut self) {
         let Some(idx) = self.folders_state.selected() else {
             return;
         };
+        if idx >= self.config.roots.len() {
+            return;
+        }
+        let path = self.config.roots[idx].display().to_string();
+        self.confirm(
+            format!("Remove “{path}” from the library?"),
+            ConfirmAction::RemoveFolder(idx),
+        );
+    }
+
+    fn do_remove_root(&mut self, idx: usize) {
         if idx >= self.config.roots.len() {
             return;
         }
@@ -1135,6 +1290,7 @@ impl App {
             self.scan_rx = None;
             self.scanning = false;
             self.library.tracks.clear();
+            self.library.set_roots(self.config.roots.clone());
             self.library.finalize();
             self.lib_state.select(None);
             self.recompute_smart();
@@ -1164,7 +1320,7 @@ impl App {
             }
             KeyCode::Char('a') => self.open_file_browser(),
             KeyCode::Char('x') | KeyCode::Char('d') | KeyCode::Delete => {
-                self.remove_selected_root()
+                self.request_remove_root()
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.start_scan();
@@ -1194,6 +1350,7 @@ impl App {
             Mode::ManageFolders => self.handle_manage_folders_key(key),
             Mode::BucketView(_) => self.handle_bucket_view_key(key),
             Mode::About => self.mode = Mode::Normal,
+            Mode::Confirm { .. } => self.handle_confirm_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1221,7 +1378,7 @@ impl App {
                 if matches!(input.kind, InputKind::Search) {
                     let f = input.buffer.clone();
                     self.library.set_filter(f);
-                    self.lib_state.select(if self.library.view_len() > 0 {
+                    self.lib_state.select(if self.library.entries_len() > 0 {
                         Some(0)
                     } else {
                         None
@@ -1233,7 +1390,7 @@ impl App {
                 if matches!(input.kind, InputKind::Search) {
                     let f = input.buffer.clone();
                     self.library.set_filter(f);
-                    self.lib_state.select(if self.library.view_len() > 0 {
+                    self.lib_state.select(if self.library.entries_len() > 0 {
                         Some(0)
                     } else {
                         None
@@ -1407,6 +1564,13 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.move_to_edge(false),
 
             KeyCode::Enter => self.activate(),
+            KeyCode::Backspace => {
+                if self.focus == Focus::Library {
+                    self.library.go_up();
+                    self.lib_state
+                        .select((self.library.entries_len() > 0).then_some(0));
+                }
+            }
             KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('n') => self.next_track(),
             KeyCode::Char('p') => self.prev_track(),
@@ -1441,6 +1605,12 @@ impl App {
                 self.config.palette = idx;
                 self.config.save().ok();
                 self.set_status(format!("Theme: {}", crate::theme::palette_name()));
+            }
+            KeyCode::Char('v') => {
+                self.zen_viz = self.zen_viz.next();
+                self.config.zen_viz = self.zen_viz.as_usize();
+                self.config.save().ok();
+                self.set_status(format!("Zen visualizer: {}", self.zen_viz.label()));
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('i') => self.mode = Mode::About,
@@ -1480,7 +1650,7 @@ impl App {
                 Focus::Queue => self.remove_from_queue(),
                 Focus::Library => {}
             },
-            KeyCode::Char('c') => self.clear_queue(),
+            KeyCode::Char('c') => self.request_clear_queue(),
             KeyCode::Char('d') => match self.focus {
                 Focus::Buckets => self.dump_selected_bucket(),
                 Focus::Library => self.dump_library(),

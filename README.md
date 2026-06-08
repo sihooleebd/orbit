@@ -45,6 +45,11 @@ On first launch Orbit adopts your **Music** folder as a library root if it exist
 Add more folders any time with `A`. Your library is cached so subsequent launches
 are instant; press `R` to rescan.
 
+The Library pane is **browsable by folder**: `Enter` opens a subfolder, `⌫` goes back
+up, and `d` dumps the current folder into the queue. Search (`/`) spans the whole
+library regardless of folder. Destructive actions (clearing the queue, deleting a
+bucket, removing a folder) ask for a **y/n confirmation** first.
+
 ## Platform support
 
 Orbit runs on **macOS, Linux, and Windows**. Audio goes through `cpal` (CoreAudio /
@@ -122,7 +127,8 @@ on macOS): `config.json`, `buckets.json`, `library.json`.
 
 ## Keys
 
-**Navigate** — `Tab`/`⇧Tab` cycle panes · `↑↓`/`j k` move · `g`/`G` top/bottom · `/` search
+**Navigate** — `Tab`/`⇧Tab` cycle panes · `↑↓`/`j k` move · `g`/`G` top/bottom · `/` search ·
+`Enter` open folder · `⌫` up a folder (Library)
 
 **Playback** — `Enter` play track / dump bucket / play queue item · `Space` pause ·
 `n`/`p` next/prev · `←→`/`h l` seek ∓5s · `+`/`-` volume · `s` shuffle · `r` repeat
@@ -164,10 +170,15 @@ back. A line at the bottom always shows exactly what `a` will add.
 
 ### Zen mode (`z`)
 
-Hides every panel and shows only the player full-screen: a **live spectrum
-analyzer** whose 10 bars are driven by the actual audio through band-pass filters
-at the same frequencies as the EQ, and **synced lyrics** if a matching `.lrc`
-sidecar exists (previous/current/next line, current highlighted).
+Hides every panel and shows only the player full-screen, with **synced lyrics** if a
+matching `.lrc` sidecar exists (previous/current/next line, current highlighted).
+Press `v` to switch the visualizer:
+
+- **Spectrum** — a live 10-bar analyzer driven by the actual audio through band-pass
+  filters at the same frequencies as the EQ.
+- **Cassette** — an animated tape deck whose reels spin with playback (and stop when
+  paused) while the tape fills with your progress.
+
 `space`/`n`/`p`/`←→`/`e` all still work; `z` or `Esc` returns to the full view.
 
 ```

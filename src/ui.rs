@@ -3,7 +3,7 @@
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap};
 use ratatui::Frame;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -47,6 +47,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::ManageFolders => draw_manage(f, area, app),
         Mode::BucketView(row) => draw_bucket_view(f, area, app, *row),
         Mode::About => draw_about(f, area),
+        Mode::Confirm { prompt, .. } => draw_confirm(f, area, prompt),
         Mode::Normal => {}
     }
 }
@@ -112,6 +113,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::ManageFolders => "↑↓ move · a add · x remove · r rescan · Esc close",
         Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
         Mode::About => "press any key to close",
+        Mode::Confirm { .. } => "y confirm · n / Esc cancel",
         Mode::Normal => {
             "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
         }
@@ -185,14 +187,18 @@ fn draw_panels(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_library(f: &mut Frame, area: Rect, app: &mut App) {
+    use crate::library::LibEntry;
+
     let focused = app.focus == Focus::Library;
     let inner_w = area.width.saturating_sub(4) as usize;
 
     let filter = app.library.filter();
-    let title = if filter.is_empty() {
-        "LIBRARY".to_string()
-    } else {
+    let title = if !filter.is_empty() {
         format!("LIBRARY /{filter}")
+    } else if let Some(name) = app.library.cwd_label() {
+        format!("LIBRARY · {name}")
+    } else {
+        "LIBRARY".to_string()
     };
     let block = panel_block("♪", &title, focused);
 
@@ -200,27 +206,48 @@ fn draw_library(f: &mut Frame, area: Rect, app: &mut App) {
 
     let items: Vec<ListItem> = app
         .library
-        .view
+        .entries
         .iter()
-        .filter_map(|&i| app.library.tracks.get(i))
-        .map(|t| {
-            let playing = now_path.as_ref() == Some(&t.path);
-            let dur = fmt_duration(t.duration());
-            let left = t.title_artist();
-            let text = pad_between(&left, &dur, inner_w);
-            let style = if playing {
-                Style::new().fg(theme::gold())
-            } else {
-                Style::new().fg(theme::fg())
-            };
-            ListItem::new(Line::from(Span::styled(text, style)))
+        .map(|entry| match entry {
+            LibEntry::Parent => ListItem::new(Line::from(Span::styled(
+                "⮤  ..",
+                Style::new().fg(theme::dim()),
+            ))),
+            LibEntry::Folder { path, count } => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let left = format!("▸ {name}/");
+                let text = pad_between(&left, &count.to_string(), inner_w);
+                ListItem::new(Line::from(Span::styled(
+                    text,
+                    Style::new().fg(theme::accent2()),
+                )))
+            }
+            LibEntry::Track(i) => {
+                let t = &app.library.tracks[*i];
+                let playing = now_path.as_ref() == Some(&t.path);
+                let dur = fmt_duration(t.duration());
+                let text = pad_between(&t.title_artist(), &dur, inner_w);
+                let style = if playing {
+                    Style::new().fg(theme::gold())
+                } else {
+                    Style::new().fg(theme::fg())
+                };
+                ListItem::new(Line::from(Span::styled(text, style)))
+            }
         })
         .collect();
 
     let empty_note = if app.library.tracks.is_empty() && !app.scanning {
         Some("No tracks. Press 'A' to add a music folder.")
-    } else if app.library.view_len() == 0 {
-        Some("No matches.")
+    } else if app.library.entries_len() == 0 {
+        Some(if filter.is_empty() {
+            "Empty folder."
+        } else {
+            "No matches."
+        })
     } else {
         None
     };
@@ -571,15 +598,10 @@ const SPECTRUM_MAX_H: u16 = 16;
 const SPECTRUM_MAX_BAR_W: usize = 48;
 
 fn draw_zen(f: &mut Frame, area: Rect, app: &App) {
-    let rows = Layout::vertical([
+    let outer = Layout::vertical([
         Constraint::Percentage(8), // top pad
         Constraint::Length(1),     // brand
-        Constraint::Length(1),     // title
-        Constraint::Length(1),     // album
-        Constraint::Min(6),        // body (art + spectrum)
-        Constraint::Length(1),     // progress
-        Constraint::Length(1),     // modes
-        Constraint::Length(3),     // lyrics
+        Constraint::Min(8),        // content
         Constraint::Length(1),     // hint
         Constraint::Percentage(4), // bottom pad
     ])
@@ -591,81 +613,108 @@ fn draw_zen(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(theme::accent2()).add_modifier(Modifier::BOLD),
         )))
         .alignment(Alignment::Center),
-        rows[1],
+        outer[1],
     );
 
+    let content = outer[2];
     match &app.now_playing {
-        Some(track) => {
-            f.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    track.artist_title(),
-                    Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD),
-                )))
-                .alignment(Alignment::Center),
-                rows[2],
-            );
-            if let Some(album) = track.album_opt() {
-                f.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        album.to_string(),
-                        Style::new().fg(theme::dim()),
-                    )))
-                    .alignment(Alignment::Center),
-                    rows[3],
-                );
-            }
-
-            draw_spectrum(f, rows[4], app);
-
-            // Progress bar, centered with times on each side.
-            let pos = app.engine.position();
-            let total = app.engine.total().unwrap_or(track.duration());
-            let ratio = if total.as_secs_f64() > 0.0 {
-                (pos.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let pos_str = fmt_duration(pos);
-            let total_str = fmt_duration(total);
-            let bar_w = (area.width as usize)
-                .saturating_sub(pos_str.len() + total_str.len() + 8)
-                .min(72);
-            let pad = (area.width as usize)
-                .saturating_sub(bar_w + pos_str.len() + total_str.len() + 4)
-                / 2;
-            let mut spans = vec![
-                Span::raw(" ".repeat(pad)),
-                Span::styled(format!("{pos_str} "), Style::new().fg(theme::fg())),
-            ];
-            spans.extend(progress_spans(bar_w, ratio as f32));
-            spans.push(Span::styled(format!(" {total_str}"), Style::new().fg(theme::dim())));
-            f.render_widget(Paragraph::new(Line::from(spans)), rows[5]);
-
-            f.render_widget(
-                Paragraph::new(modes_line(app)).alignment(Alignment::Center),
-                rows[6],
-            );
-
-            draw_lyrics(f, rows[7], app);
-        }
+        Some(track) => match app.zen_viz {
+            crate::app::ZenViz::Spectrum => draw_zen_spectrum(f, content, app, track),
+            crate::app::ZenViz::Cassette => draw_zen_cassette(f, content, app, track),
+        },
         None => {
             f.render_widget(
                 Paragraph::new("Nothing playing — exit zen (z) and pick a track.")
                     .style(Style::new().fg(theme::dim()))
                     .alignment(Alignment::Center),
-                rows[4],
+                content,
             );
         }
     }
 
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            "space pause · n/p track · ←→ seek · e EQ · z/Esc exit",
+            "space pause · n/p track · ←→ seek · e EQ · v viz · z/Esc exit",
             Style::new().fg(theme::faint()),
         )))
         .alignment(Alignment::Center),
-        rows[8],
+        outer[3],
     );
+}
+
+/// Spectrum-mode zen layout: title/album over the spectrum, progress, modes, lyrics.
+fn draw_zen_spectrum(f: &mut Frame, area: Rect, app: &App, track: &crate::model::Track) {
+    let rows = Layout::vertical([
+        Constraint::Length(1), // title
+        Constraint::Length(1), // album
+        Constraint::Min(4),    // spectrum
+        Constraint::Length(1), // progress
+        Constraint::Length(1), // modes
+        Constraint::Length(3), // lyrics
+    ])
+    .split(area);
+
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(&track.artist_title(), rows[0].width as usize),
+            Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Center),
+        rows[0],
+    );
+    if let Some(album) = track.album_opt() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(album, rows[1].width as usize),
+                Style::new().fg(theme::dim()),
+            )))
+            .alignment(Alignment::Center),
+            rows[1],
+        );
+    }
+    draw_spectrum(f, rows[2], app);
+    f.render_widget(
+        Paragraph::new(progress_line(rows[3].width as usize, app)),
+        rows[3],
+    );
+    f.render_widget(
+        Paragraph::new(modes_line(app)).alignment(Alignment::Center),
+        rows[4],
+    );
+    draw_lyrics(f, rows[5], app);
+}
+
+/// A centered progress line: `M:SS ━━━●─── M:SS`.
+fn progress_line(width: usize, app: &App) -> Line<'static> {
+    let pos = app.engine.position();
+    let total = app
+        .engine
+        .total()
+        .or_else(|| app.now_playing.as_ref().map(|t| t.duration()))
+        .unwrap_or_default();
+    let ratio = if total.as_secs_f64() > 0.0 {
+        (pos.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let pos_str = fmt_duration(pos);
+    let total_str = fmt_duration(total);
+    let bar_w = width
+        .saturating_sub(pos_str.len() + total_str.len() + 4)
+        .min(60);
+    let pad = width
+        .saturating_sub(bar_w + pos_str.len() + total_str.len() + 2)
+        / 2;
+    let mut spans = vec![
+        Span::raw(" ".repeat(pad)),
+        Span::styled(format!("{pos_str} "), Style::new().fg(theme::fg())),
+    ];
+    spans.extend(progress_spans(bar_w, ratio as f32));
+    spans.push(Span::styled(
+        format!(" {total_str}"),
+        Style::new().fg(theme::dim()),
+    ));
+    Line::from(spans)
 }
 
 /// Synced lyrics: previous / current / next line, centered.
@@ -831,6 +880,147 @@ fn draw_spectrum_horizontal(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
+/// Cassette-mode zen layout: a tape deck holding the metadata, reels, progress,
+/// and modes inside the cassette shell.
+fn draw_zen_cassette(f: &mut Frame, area: Rect, app: &App, track: &crate::model::Track) {
+    let w = area.width.min(72);
+    let h = area.height.min(16);
+    let rect = centered_rect(w, h, area);
+
+    let shell = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme::accent()))
+        .title(Line::from(Span::styled(
+            " ◆ ORBIT · C-90 ",
+            Style::new().fg(theme::accent()).add_modifier(Modifier::BOLD),
+        )))
+        .padding(Padding::horizontal(4))
+        .style(Style::new().bg(theme::bg()));
+    let inner = shell.inner(rect);
+    f.render_widget(shell, rect);
+
+    let rows = Layout::vertical([
+        Constraint::Length(1), // spacer
+        Constraint::Length(1), // title
+        Constraint::Length(1), // album
+        Constraint::Min(3),    // reels
+        Constraint::Length(1), // progress
+        Constraint::Length(1), // modes
+        Constraint::Length(1), // spacer
+    ])
+    .split(inner);
+
+    let title_w = rows[1].width as usize;
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            truncate(&track.artist_title(), title_w),
+            Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD),
+        )))
+        .alignment(Alignment::Center),
+        rows[1],
+    );
+    if let Some(album) = track.album_opt() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(album, rows[2].width as usize),
+                Style::new().fg(theme::dim()),
+            )))
+            .alignment(Alignment::Center),
+            rows[2],
+        );
+    }
+
+    draw_reels(f, rows[3], app);
+
+    f.render_widget(
+        Paragraph::new(progress_line(rows[4].width as usize, app)),
+        rows[4],
+    );
+    f.render_widget(
+        Paragraph::new(modes_line(app)).alignment(Alignment::Center),
+        rows[5],
+    );
+}
+
+/// Two large spinning reels with a tape spool between them, centered in `area`.
+///
+/// Each reel is a 9×5 disk with a single spoke that rotates through four frames
+/// (—, ╲, |, ╱), reading as a turning hub. The reels advance with playback.
+fn draw_reels(f: &mut Frame, area: Rect, app: &App) {
+    // Interior spoke frames: 3 rows × 7 columns each.
+    const FRAMES: [[&str; 3]; 4] = [
+        ["       ", " ──●── ", "       "], // —
+        [" ╲     ", "   ●   ", "     ╲ "], // ╲
+        ["   |   ", "   ●   ", "   |   "], // |
+        ["     ╱ ", "   ●   ", " ╱     "], // ╱
+    ];
+    const TOP: &str = " ╭─────╮ "; // 9 wide
+    const BOT: &str = " ╰──┬──╯ "; // 9 wide, tape exits the bottom centre
+    const GAP: usize = 6;
+
+    let phase = (app.engine.position().as_millis() / 140) as usize;
+    let fl = &FRAMES[phase % 4];
+    let fr = &FRAMES[(phase + 2) % 4];
+
+    let outline = Style::new().fg(theme::dim());
+    let spoke = Style::new().fg(theme::gold()).add_modifier(Modifier::BOLD);
+    let tape = Style::new().fg(theme::toward_bg(theme::gold(), 0.35));
+
+    // One interior row of a reel: sloped/vertical border + gold spoke interior.
+    let reel_row = |left: &'static str, interior: &str, right: &'static str| {
+        vec![
+            Span::styled(left, outline),
+            Span::styled(interior.to_string(), spoke),
+            Span::styled(right, outline),
+        ]
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    let top_pad = (area.height as usize).saturating_sub(6) / 2;
+    for _ in 0..top_pad {
+        lines.push(Line::from(""));
+    }
+
+    let gap_blank = Span::raw(" ".repeat(GAP));
+
+    // Row 0: rounded tops.
+    lines.push(Line::from(vec![
+        Span::styled(TOP, outline),
+        gap_blank.clone(),
+        Span::styled(TOP, outline),
+    ]));
+    // Row 1: upper slope.
+    let mut r1 = reel_row("/", fl[0], "\\");
+    r1.push(gap_blank.clone());
+    r1.extend(reel_row("/", fr[0], "\\"));
+    lines.push(Line::from(r1));
+    // Row 2: middle (hubs).
+    let mut r2 = reel_row("│", fl[1], "│");
+    r2.push(gap_blank.clone());
+    r2.extend(reel_row("│", fr[1], "│"));
+    lines.push(Line::from(r2));
+    // Row 3: lower slope.
+    let mut r3 = reel_row("\\", fl[2], "/");
+    r3.push(gap_blank.clone());
+    r3.extend(reel_row("\\", fr[2], "/"));
+    lines.push(Line::from(r3));
+    // Row 4: rounded bottoms, each with a tape tap (┬).
+    lines.push(Line::from(vec![
+        Span::styled(BOT, outline),
+        gap_blank,
+        Span::styled(BOT, outline),
+    ]));
+    // Row 5: the exposed tape running between the two reels.
+    // Reel centres sit at columns 4 and 9 + 6 + 4 = 19 of the 24-wide block.
+    let run = "─".repeat(14); // cols 5..=18
+    lines.push(Line::from(Span::styled(format!("    ╰{run}╯    "), tape)));
+
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).alignment(Alignment::Center),
+        area,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Bars
 // ---------------------------------------------------------------------------
@@ -891,7 +1081,7 @@ fn overlay_block(title: &str) -> Block<'static> {
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
-    let rect = centered_rect(66, 38, area);
+    let rect = centered_rect(66, 39, area);
     f.render_widget(Clear, rect);
     let block = overlay_block("ORBIT · KEYS");
     let inner = block.inner(rect);
@@ -935,7 +1125,8 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("A / R"), desc("manage library folders / rescan")]),
         Line::from(vec![key("e"), desc("open equalizer (x enables it inside)")]),
         Line::from(vec![key("E"), desc("toggle EQ on/off")]),
-        Line::from(vec![key("z"), desc("zen mode (full-screen player + spectrum)")]),
+        Line::from(vec![key("z"), desc("zen mode (full-screen player)")]),
+        Line::from(vec![key("v"), desc("cycle zen visualizer (spectrum / cassette)")]),
         Line::from(vec![key("t"), desc("cycle colour theme")]),
         Line::from(vec![key("i"), desc("about Orbit")]),
         Line::from(vec![key("q"), desc("quit")]),
@@ -1017,6 +1208,42 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_confirm(f: &mut Frame, area: Rect, prompt: &str) {
+    let w = (prompt.chars().count() as u16 + 6).clamp(28, 64);
+    let rect = centered_rect(w, 5, area);
+    f.render_widget(Clear, rect);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme::error()))
+        .title(Line::from(Span::styled(
+            " CONFIRM ",
+            Style::new().fg(theme::error()).add_modifier(Modifier::BOLD),
+        )))
+        .style(Style::new().bg(theme::panel_bg()));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    f.render_widget(
+        Paragraph::new(prompt.to_string())
+            .style(Style::new().fg(theme::fg()).bg(theme::panel_bg()))
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true }),
+        rows[0],
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("[y] ", Style::new().fg(theme::green()).add_modifier(Modifier::BOLD)),
+            Span::styled("yes    ", Style::new().fg(theme::dim())),
+            Span::styled("[n] ", Style::new().fg(theme::error()).add_modifier(Modifier::BOLD)),
+            Span::styled("no", Style::new().fg(theme::dim())),
+        ]))
+        .alignment(Alignment::Center)
+        .style(Style::new().bg(theme::panel_bg())),
+        rows[1],
+    );
 }
 
 fn draw_about(f: &mut Frame, area: Rect) {

@@ -1,5 +1,6 @@
 //! Library scanning and the in-memory track collection.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -12,24 +13,51 @@ use walkdir::WalkDir;
 use crate::config;
 use crate::model::Track;
 
-/// The merged library plus a cached, filtered view.
+/// A row shown in the Library pane.
+pub enum LibEntry {
+    /// The ".." row that navigates up a level.
+    Parent,
+    /// A sub-directory (with a recursive track count).
+    Folder { path: PathBuf, count: usize },
+    /// A track (index into `tracks`).
+    Track(usize),
+}
+
+/// The merged library, navigable by folder, with a search filter.
 #[derive(Default)]
 pub struct Library {
     pub tracks: Vec<Track>,
-    /// Indices into `tracks` matching the current filter, in display order.
-    pub view: Vec<usize>,
+    /// Library roots (top-level folders).
+    roots: Vec<PathBuf>,
+    /// Current folder being browsed (None = top level showing the roots).
+    cwd: Option<PathBuf>,
     filter: String,
+    /// The current display rows.
+    pub entries: Vec<LibEntry>,
 }
 
 impl Library {
     pub fn new(tracks: Vec<Track>) -> Self {
         let mut lib = Self {
             tracks,
-            view: Vec::new(),
+            roots: Vec::new(),
+            cwd: None,
             filter: String::new(),
+            entries: Vec::new(),
         };
         lib.rebuild_view();
         lib
+    }
+
+    pub fn set_roots(&mut self, roots: Vec<PathBuf>) {
+        self.roots = roots;
+        // If the current folder is no longer under a root, reset to top.
+        if let Some(dir) = &self.cwd {
+            if !self.roots.iter().any(|r| dir.starts_with(r)) {
+                self.cwd = None;
+            }
+        }
+        self.rebuild_view();
     }
 
     pub fn set_filter(&mut self, filter: String) {
@@ -41,24 +69,123 @@ impl Library {
         &self.filter
     }
 
+    /// Reset folder navigation back to the top level.
+    pub fn reset_nav(&mut self) {
+        self.cwd = None;
+        self.rebuild_view();
+    }
+
+    /// A short label for the current folder (for the panel title).
+    pub fn cwd_label(&self) -> Option<String> {
+        self.cwd
+            .as_ref()
+            .map(|d| d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| d.display().to_string()))
+    }
+
+    /// Descend into a folder.
+    pub fn enter(&mut self, path: PathBuf) {
+        self.cwd = Some(path);
+        self.rebuild_view();
+    }
+
+    /// Go up one level (to the parent folder, or the top when leaving a root).
+    pub fn go_up(&mut self) {
+        if let Some(dir) = self.cwd.clone() {
+            if self.roots.iter().any(|r| *r == dir) {
+                self.cwd = None;
+            } else {
+                self.cwd = dir.parent().map(|p| p.to_path_buf());
+            }
+            self.rebuild_view();
+        }
+    }
+
+    pub fn entry_at(&self, row: usize) -> Option<&LibEntry> {
+        self.entries.get(row)
+    }
+
+    pub fn entries_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn track(&self, idx: usize) -> Option<&Track> {
+        self.tracks.get(idx)
+    }
+
+    /// Tracks in the current scope: filtered matches, else everything under the
+    /// current folder (recursively), else the whole library.
+    pub fn scoped_tracks(&self) -> Vec<Track> {
+        if !self.filter.is_empty() {
+            let needle = self.filter.to_lowercase();
+            return self
+                .tracks
+                .iter()
+                .filter(|t| t.search_haystack().contains(&needle))
+                .cloned()
+                .collect();
+        }
+        match &self.cwd {
+            Some(dir) => self
+                .tracks
+                .iter()
+                .filter(|t| t.path.starts_with(dir))
+                .cloned()
+                .collect(),
+            None => self.tracks.clone(),
+        }
+    }
+
     pub fn rebuild_view(&mut self) {
-        let needle = self.filter.to_lowercase();
-        self.view = self
-            .tracks
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| needle.is_empty() || t.search_haystack().contains(&needle))
-            .map(|(i, _)| i)
-            .collect();
-    }
+        self.entries.clear();
 
-    /// Track at a view row, if any.
-    pub fn track_at_view(&self, row: usize) -> Option<&Track> {
-        self.view.get(row).and_then(|&i| self.tracks.get(i))
-    }
+        // Search overrides folder browsing with a flat, global result list.
+        if !self.filter.is_empty() {
+            let needle = self.filter.to_lowercase();
+            for (i, t) in self.tracks.iter().enumerate() {
+                if t.search_haystack().contains(&needle) {
+                    self.entries.push(LibEntry::Track(i));
+                }
+            }
+            return;
+        }
 
-    pub fn view_len(&self) -> usize {
-        self.view.len()
+        match self.cwd.clone() {
+            None => {
+                // Top level: the roots, each with a recursive track count.
+                let mut roots = self.roots.clone();
+                roots.sort_by_key(|p| folder_sort_key(p));
+                for r in roots {
+                    let count = self.tracks.iter().filter(|t| t.path.starts_with(&r)).count();
+                    self.entries.push(LibEntry::Folder { path: r, count });
+                }
+            }
+            Some(dir) => {
+                self.entries.push(LibEntry::Parent);
+                let mut counts: HashMap<PathBuf, usize> = HashMap::new();
+                let mut tracks_here: Vec<usize> = Vec::new();
+                for (i, t) in self.tracks.iter().enumerate() {
+                    if let Ok(rel) = t.path.strip_prefix(&dir) {
+                        let mut comps = rel.components();
+                        if let Some(first) = comps.next() {
+                            if comps.next().is_some() {
+                                *counts.entry(dir.join(first.as_os_str())).or_insert(0) += 1;
+                            } else {
+                                tracks_here.push(i);
+                            }
+                        }
+                    }
+                }
+                let mut folders: Vec<(PathBuf, usize)> = counts.into_iter().collect();
+                folders.sort_by(|a, b| folder_sort_key(&a.0).cmp(&folder_sort_key(&b.0)));
+                for (path, count) in folders {
+                    self.entries.push(LibEntry::Folder { path, count });
+                }
+                // tracks_here keeps the global (artist/album/title) sort order.
+                for i in tracks_here {
+                    self.entries.push(LibEntry::Track(i));
+                }
+            }
+        }
     }
 
     /// Append a single track during an in-progress scan (cheap; no sort/save).
@@ -72,6 +199,12 @@ impl Library {
         self.rebuild_view();
         save_cache(&self.tracks);
     }
+}
+
+fn folder_sort_key(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_else(|| p.to_string_lossy().to_lowercase())
 }
 
 fn sort_tracks(tracks: &mut [Track]) {
