@@ -17,6 +17,24 @@ cascade of RBJ peaking biquad filters applied to the decoded audio stream, with
 band gains you can move live while music plays. Integrates with your OS media keys
 and the system Now Playing panel.
 
+## Screenshots
+
+The three-pane overview — library, buckets (smart + your own), and the queue:
+
+![Overview](assets/overview.png)
+
+Zen mode (`z`) — full-screen player with a live spectrum analyzer driven by the audio:
+
+![Zen mode](assets/zen.png)
+
+The equalizer (`e`) — gain bars over the live spectrum, with presets:
+
+![Equalizer](assets/equalizer.png)
+
+The built-in folder browser for managing your library:
+
+![Folder browser](assets/file-browser.png)
+
 ## Run
 
 ```sh
