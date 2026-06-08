@@ -18,6 +18,35 @@ On first launch Orbit adopts `~/Music` as a library root if it exists. Add more
 folders any time with `A`. Your library is cached so subsequent launches are
 instant; press `R` to rescan.
 
+## Install globally
+
+Build and install the binary so you can launch it from anywhere by typing `orbit`:
+
+```sh
+cargo install --path . --root ~/.local
+```
+
+This puts the binary at `~/.local/bin/orbit`. Make sure that directory is on your
+`PATH` (it is on most setups); otherwise add to your shell profile:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`cargo install` copies a snapshot, so after changing the code re-run it with
+`--force` to update the global command:
+
+```sh
+cargo install --path . --root ~/.local --force
+```
+
+Prefer it to track your latest build automatically? Symlink instead of installing
+(re-pointed on every `cargo build --release`, but breaks if you move the project):
+
+```sh
+ln -sf "$(pwd)/target/release/orbit" ~/.local/bin/orbit
+```
+
 State lives under your platform data dir (`~/Library/Application Support/orbit`
 on macOS): `config.json`, `buckets.json`, `library.json`.
 
