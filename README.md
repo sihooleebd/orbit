@@ -118,15 +118,15 @@ sidecar exists (previous/current/next line, current highlighted).
 `space`/`n`/`p`/`←→`/`e` all still work; `z` or `Esc` returns to the full view.
 
 ```
-                              ◈ ORBIT
+                      ◈ ORBIT
 
-                       Kavinsky — Nightcall
-                            OutRun
+                Kavinsky — Nightcall
+                      OutRun
 
               █        █              █
         █     █     █  █     █        █     █
-        █  █  █  █  █  █  █  █  █  █   █  █  █
-        █  █  █  █  █  █  █  █  █  █   █  █  █
+        █  █  █  █  █  █  █  █  █  █  █  █  █
+        █  █  █  █  █  █  █  █  █  █  █  █  █
 
         1:23 ━━━━━━●──────────────────── 4:18
             vol ▰▰▰▰▰▱▱▱ · shuffle · repeat · EQ
