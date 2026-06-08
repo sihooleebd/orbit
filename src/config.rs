@@ -1,7 +1,7 @@
 //! Persistent configuration: library roots, last volume, EQ settings, modes.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -71,10 +71,15 @@ fn project_dir() -> PathBuf {
     if let Some(dirs) = directories::ProjectDirs::from("", "", "orbit") {
         dirs.data_dir().to_path_buf()
     } else {
-        // Fallback to a dot-dir in $HOME.
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        home.join(".orbit")
+        home_dir().join(".orbit")
     }
+}
+
+/// The user's home directory, cross-platform (`%USERPROFILE%` on Windows).
+pub fn home_dir() -> PathBuf {
+    directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub fn config_file() -> PathBuf {
@@ -93,13 +98,16 @@ pub fn stats_file() -> PathBuf {
     project_dir().join("stats.json")
 }
 
-/// Default music directory guess for first-run convenience.
+/// Default music directory guess for first-run convenience. Uses the OS's
+/// standard "Music" location (cross-platform), falling back to `~/Music`.
 pub fn default_music_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let candidate = Path::new(&home).join("Music");
-    if candidate.is_dir() {
-        Some(candidate)
-    } else {
-        None
+    if let Some(dirs) = directories::UserDirs::new() {
+        if let Some(audio) = dirs.audio_dir() {
+            if audio.is_dir() {
+                return Some(audio.to_path_buf());
+            }
+        }
     }
+    let candidate = home_dir().join("Music");
+    candidate.is_dir().then_some(candidate)
 }

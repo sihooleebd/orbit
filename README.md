@@ -7,13 +7,15 @@
 ```                               
 # ◈ Orbit
 
-A beautiful local **MP3 player TUI** with **buckets** (playlists you dump into the
-queue) and a real-time **10-band graphic equalizer**.
+A beautiful local **music player TUI** with **buckets** (playlists you dump into the
+queue) and a real-time **10-band graphic equalizer**. Plays **MP3, FLAC, WAV, OGG,
+M4A/MP4, and AAC**.
 
 Built in Rust with [ratatui](https://ratatui.rs) for rendering and
 [rodio](https://github.com/RustAudio/rodio) for playback. The EQ is a hand-rolled
 cascade of RBJ peaking biquad filters applied to the decoded audio stream, with
-band gains you can move live while music plays.
+band gains you can move live while music plays. Integrates with your OS media keys
+and the system Now Playing panel.
 
 ## Run
 
@@ -21,9 +23,33 @@ band gains you can move live while music plays.
 cargo run --release
 ```
 
-On first launch Orbit adopts `~/Music` as a library root if it exists. Add more
-folders any time with `A`. Your library is cached so subsequent launches are
-instant; press `R` to rescan.
+On first launch Orbit adopts your **Music** folder as a library root if it exists.
+Add more folders any time with `A`. Your library is cached so subsequent launches
+are instant; press `R` to rescan.
+
+## Platform support
+
+Orbit runs on **macOS, Linux, and Windows**. Audio goes through `cpal` (CoreAudio /
+ALSA / WASAPI) and OS media controls through `souvlaki`.
+
+**Linux** needs a couple of system dev packages for audio (ALSA) and media controls
+(D-Bus / MPRIS):
+
+```sh
+# Debian/Ubuntu
+sudo apt install libasound2-dev libdbus-1-dev pkg-config
+# Fedora
+sudo dnf install alsa-lib-devel dbus-devel pkgconf-pkg-config
+```
+
+**macOS / Windows** need no extra packages — just a Rust toolchain.
+
+Media-control integration per platform:
+- **macOS** — Now Playing in Control Center / lock screen + media keys
+- **Linux** — MPRIS (controllable from your desktop's media widgets; needs a D-Bus session)
+- **Windows** — System Media Transport Controls (uses the console window)
+
+If the OS controls can't initialise, Orbit just runs without them — playback is unaffected.
 
 ## Install globally
 
@@ -54,6 +80,9 @@ Prefer it to track your latest build automatically? Symlink instead of installin
 ln -sf "$(pwd)/target/release/orbit" ~/.local/bin/orbit
 ```
 
+On **Windows**, just `cargo install --path .` — it lands in `%USERPROFILE%\.cargo\bin`,
+which is already on your `PATH`, so you can run `orbit` from any terminal.
+
 State lives under your platform data dir (`~/Library/Application Support/orbit`
 on macOS): `config.json`, `buckets.json`, `library.json`.
 
@@ -81,7 +110,11 @@ on macOS): `config.json`, `buckets.json`, `library.json`.
 `n`/`p` next/prev · `←→`/`h l` seek ∓5s · `+`/`-` volume · `s` shuffle · `r` repeat
 
 **Buckets & queue** — `b` new bucket · `S` save queue as a bucket · `a` add track to a
-bucket · `d`/`Enter` dump bucket → queue · `x` delete bucket / remove queue item · `c` clear queue
+bucket · `o` open bucket (edit) · `d`/`Enter` dump bucket → queue · `x` delete bucket /
+remove queue item · `c` clear queue
+
+**Media keys** — your keyboard's play/pause, next, and previous keys control Orbit,
+and the current track shows in the system Now Playing panel (Control Center on macOS).
 
 **Themes** — `t` cycles colour palettes (Synthwave · Nord · Matrix · Solarized · Ember), saved across sessions.
 
@@ -95,6 +128,8 @@ Buckets are alive, not just static lists:
 - Each bucket gets its own **accent colour**.
 - Focus the Buckets pane and it **splits top/bottom**, previewing the tracks in the
   highlighted bucket below the list.
+- **Edit a bucket** with `o`: open it to play, **remove** tracks (`x`), **reorder**
+  them (`K`/`J`), or **rename** the bucket (`r`). Smart buckets open read-only.
 
 **Library & EQ** — `A` manage folders · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `?` help · `q` quit
 

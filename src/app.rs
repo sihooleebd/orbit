@@ -49,6 +49,8 @@ pub enum InputKind {
     NewBucketForTrack(Track),
     /// Create a bucket from the current queue.
     SaveQueueAsBucket,
+    /// Rename an existing user bucket (by index).
+    RenameBucket(usize),
 }
 
 /// An auto-generated, read-only bucket derived from the library + play stats.
@@ -81,6 +83,8 @@ pub enum Mode {
     PickBucket { track: Track },
     FileBrowser,
     ManageFolders,
+    /// Viewing/editing the tracks inside a bucket.
+    BucketView(BucketRow),
 }
 
 /// A directory browser for picking a library folder (musikcube-style).
@@ -185,9 +189,14 @@ pub struct App {
     pub fs_state: ListState,
     /// Selection state for the Manage Folders overlay.
     pub folders_state: ListState,
+    /// Selection state for the bucket detail view.
+    pub bucket_view_state: ListState,
 
     /// Synced lyrics for the current track, if a .lrc sidecar exists.
     pub lyrics: Option<crate::media::Lyrics>,
+
+    /// OS media controls (media keys + Now Playing), if available.
+    remote: Option<crate::remote::Remote>,
 }
 
 impl App {
@@ -245,7 +254,9 @@ impl App {
             browser: None,
             fs_state: ListState::default(),
             folders_state: ListState::default(),
+            bucket_view_state: ListState::default(),
             lyrics: None,
+            remote: crate::remote::Remote::new(),
         };
 
         app.recompute_smart();
@@ -427,6 +438,9 @@ impl App {
         if self.now_playing.is_none() || self.engine.is_paused() {
             self.engine.eq().decay_levels(0.80);
         }
+
+        // Apply any OS media-control commands (media keys / Now Playing).
+        self.process_remote();
     }
 
     fn on_track_finished(&mut self) {
@@ -440,6 +454,7 @@ impl App {
                 self.expect_playing = false;
                 self.now_playing = None;
                 self.update_media();
+                self.update_remote();
                 self.engine.stop();
                 self.set_status("Queue finished.");
             }
@@ -456,6 +471,65 @@ impl App {
         };
     }
 
+    /// Push the current track + playback state to the OS Now Playing panel.
+    fn update_remote(&mut self) {
+        if self.remote.is_none() {
+            return;
+        }
+        let info = self.now_playing.as_ref().map(|t| {
+            (
+                t.display_title().to_string(),
+                t.artist_opt().unwrap_or("").to_string(),
+                t.album_opt().map(|s| s.to_string()),
+                self.engine.is_paused(),
+                self.engine.position(),
+                self.engine.total(),
+            )
+        });
+        let remote = self.remote.as_mut().unwrap();
+        match info {
+            Some((title, artist, album, paused, pos, dur)) => {
+                remote.set_now_playing(&title, &artist, album.as_deref(), paused, pos, dur)
+            }
+            None => remote.set_stopped(),
+        }
+    }
+
+    /// Toggle play/pause and reflect it in the OS controls.
+    pub fn toggle_pause(&mut self) {
+        self.engine.toggle_pause();
+        self.update_remote();
+    }
+
+    /// Apply queued OS media-control commands (media keys, Now Playing buttons).
+    fn process_remote(&mut self) {
+        let cmds = match self.remote.as_mut() {
+            Some(r) => r.poll(),
+            None => return,
+        };
+        for cmd in cmds {
+            use crate::remote::RemoteCmd::*;
+            match cmd {
+                PlayPause => self.toggle_pause(),
+                Play => {
+                    if self.engine.is_paused() {
+                        self.toggle_pause();
+                    }
+                }
+                Pause => {
+                    if !self.engine.is_paused() {
+                        self.toggle_pause();
+                    }
+                }
+                Next => self.next_track(),
+                Prev => self.prev_track(),
+                Stop => self.clear_queue(),
+                SeekForward => self.engine.seek_relative(5),
+                SeekBackward => self.engine.seek_relative(-5),
+            }
+        }
+    }
+
     fn play_track(&mut self, track: Track) {
         match self.engine.play_path(&track.path) {
             Ok(()) => {
@@ -468,6 +542,7 @@ impl App {
                 self.expect_playing = true;
                 self.seen_progress = false;
                 self.sync_queue_selection();
+                self.update_remote();
             }
             Err(e) => {
                 self.set_error(format!("Playback error: {e}"));
@@ -572,11 +647,7 @@ impl App {
         match self.focus {
             Focus::Library => {
                 if let Some(track) = self.selected_library_track() {
-                    // Append to queue and jump to it immediately.
-                    self.queue.extend([track.clone()]);
-                    let new_idx = self.queue.len() - 1;
-                    self.queue.jump_to(new_idx);
-                    self.play_track(track);
+                    self.enqueue_and_play(track);
                 }
             }
             Focus::Buckets => self.dump_selected_bucket(),
@@ -616,6 +687,105 @@ impl App {
             self.play_current_in_queue();
         }
         self.set_status(format!("Dumped {count} tracks from “{name}” into the queue."));
+    }
+
+    /// Append one track to the queue and start playing it immediately.
+    fn enqueue_and_play(&mut self, track: Track) {
+        self.queue.extend([track.clone()]);
+        let idx = self.queue.len() - 1;
+        self.queue.jump_to(idx);
+        self.play_track(track);
+    }
+
+    // -- bucket detail view ------------------------------------------------
+
+    /// Tracks for a bucket row (smart or user).
+    fn row_tracks(&self, row: BucketRow) -> &[Track] {
+        match row {
+            BucketRow::Smart(i) => self.smart.get(i).map(|b| b.tracks.as_slice()).unwrap_or(&[]),
+            BucketRow::User(i) => self
+                .store
+                .buckets
+                .get(i)
+                .map(|b| b.tracks.as_slice())
+                .unwrap_or(&[]),
+        }
+    }
+
+    fn open_bucket_view(&mut self) {
+        let Some(row) = self.selected_bucket_row() else {
+            return;
+        };
+        let len = self.row_tracks(row).len();
+        self.bucket_view_state
+            .select(if len > 0 { Some(0) } else { None });
+        self.mode = Mode::BucketView(row);
+    }
+
+    fn handle_bucket_view_key(&mut self, key: KeyEvent) {
+        let row = match &self.mode {
+            Mode::BucketView(r) => *r,
+            _ => return,
+        };
+        let len = self.row_tracks(row).len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => {
+                if len > 0 {
+                    let c = self.bucket_view_state.selected().unwrap_or(0);
+                    self.bucket_view_state.select(Some(c.saturating_sub(1)));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 {
+                    let c = self.bucket_view_state.selected().unwrap_or(0);
+                    self.bucket_view_state.select(Some((c + 1).min(len - 1)));
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(i) = self.bucket_view_state.selected() {
+                    if let Some(t) = self.row_tracks(row).get(i).cloned() {
+                        self.enqueue_and_play(t);
+                    }
+                }
+            }
+            // Editing — user buckets only.
+            _ => {
+                let BucketRow::User(bidx) = row else { return };
+                match key.code {
+                    KeyCode::Char('x') | KeyCode::Char('d') | KeyCode::Delete => {
+                        if let Some(i) = self.bucket_view_state.selected() {
+                            self.store.remove_track(bidx, i);
+                            self.store.save();
+                            let nlen = self.store.buckets[bidx].tracks.len();
+                            self.bucket_view_state
+                                .select(if nlen == 0 { None } else { Some(i.min(nlen - 1)) });
+                        }
+                    }
+                    KeyCode::Char('K') => {
+                        if let Some(i) = self.bucket_view_state.selected() {
+                            let ni = self.store.move_track(bidx, i, -1);
+                            self.store.save();
+                            self.bucket_view_state.select(Some(ni));
+                        }
+                    }
+                    KeyCode::Char('J') => {
+                        if let Some(i) = self.bucket_view_state.selected() {
+                            let ni = self.store.move_track(bidx, i, 1);
+                            self.store.save();
+                            self.bucket_view_state.select(Some(ni));
+                        }
+                    }
+                    KeyCode::Char('r') => {
+                        self.mode = Mode::Input(Input {
+                            kind: InputKind::RenameBucket(bidx),
+                            buffer: self.store.buckets[bidx].name.clone(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     // -- buckets -----------------------------------------------------------
@@ -687,6 +857,7 @@ impl App {
                     self.engine.stop();
                     self.now_playing = None;
                     self.update_media();
+                    self.update_remote();
                     self.expect_playing = false;
                 } else {
                     self.play_current_in_queue();
@@ -707,6 +878,7 @@ impl App {
         self.engine.stop();
         self.now_playing = None;
         self.update_media();
+        self.update_remote();
         self.expect_playing = false;
         self.set_status("Queue cleared.");
     }
@@ -805,19 +977,10 @@ impl App {
     // -- file browser ------------------------------------------------------
 
     fn open_file_browser(&mut self) {
-        // Start from the most recently added root, else $HOME, else "/".
-        let start = self
-            .config
-            .roots
-            .last()
-            .cloned()
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("/"));
-        let start = if start.is_dir() {
-            start
-        } else {
-            PathBuf::from("/")
-        };
+        // Start from the most recently added root, else the home directory.
+        let home = config::home_dir();
+        let start = self.config.roots.last().cloned().unwrap_or_else(|| home.clone());
+        let start = if start.is_dir() { start } else { home };
         self.browser = Some(FileBrowser::load(start, false));
         self.fs_state.select(Some(0));
         self.mode = Mode::FileBrowser;
@@ -1001,6 +1164,7 @@ impl App {
             Mode::Eq => self.handle_eq_key(key),
             Mode::FileBrowser => self.handle_browser_key(key),
             Mode::ManageFolders => self.handle_manage_folders_key(key),
+            Mode::BucketView(_) => self.handle_bucket_view_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1096,6 +1260,15 @@ impl App {
                 self.bucket_state.select(Some(self.smart_len() + idx));
                 self.set_status(format!("Saved {count} tracks to “{buffer}”."));
             }
+            InputKind::RenameBucket(idx) => {
+                if buffer.is_empty() {
+                    self.set_status("Bucket name cannot be empty.");
+                    return;
+                }
+                self.store.rename(idx, buffer.clone());
+                self.store.save();
+                self.set_status(format!("Renamed to “{buffer}”."));
+            }
         }
     }
 
@@ -1186,7 +1359,7 @@ impl App {
                 let idx = c as usize - '1' as usize;
                 self.eq_apply_preset(idx);
             }
-            KeyCode::Char(' ') => self.engine.toggle_pause(),
+            KeyCode::Char(' ') => self.toggle_pause(),
             _ => {}
         }
     }
@@ -1205,9 +1378,7 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.move_to_edge(false),
 
             KeyCode::Enter => self.activate(),
-            KeyCode::Char(' ') => {
-                self.engine.toggle_pause();
-            }
+            KeyCode::Char(' ') => self.toggle_pause(),
             KeyCode::Char('n') => self.next_track(),
             KeyCode::Char('p') => self.prev_track(),
 
@@ -1261,6 +1432,11 @@ impl App {
                 }
             }
             KeyCode::Char('a') => self.add_selected_to_bucket(),
+            KeyCode::Char('o') => {
+                if self.focus == Focus::Buckets {
+                    self.open_bucket_view();
+                }
+            }
             KeyCode::Char('A') => self.open_manage_folders(),
             KeyCode::Char('/') => {
                 self.mode = Mode::Input(Input {

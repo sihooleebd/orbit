@@ -102,16 +102,24 @@ fn save_cache(tracks: &[Track]) {
     }
 }
 
-fn is_mp3(path: &Path) -> bool {
+/// Audio extensions Orbit can decode (rodio/symphonia) and tag (lofty).
+const SUPPORTED_EXTS: &[&str] = &[
+    "mp3", "flac", "wav", "ogg", "oga", "m4a", "mp4", "aac",
+];
+
+fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("mp3"))
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            SUPPORTED_EXTS.contains(&e.as_str())
+        })
         .unwrap_or(false)
 }
 
 /// Read one file's tags into a Track. Falls back to the file name for the title.
 pub fn read_track(path: &Path) -> Option<Track> {
-    if !is_mp3(path) {
+    if !is_supported(path) {
         return None;
     }
     let tagged = lofty::read_from_path(path).ok();

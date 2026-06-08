@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Focus, InputKind, Mode};
+use crate::app::{App, BucketRow, Focus, InputKind, Mode};
 use crate::audio::{BAND_LABELS, NUM_BANDS, PRESETS};
 use crate::model::fmt_duration;
 use crate::theme;
@@ -45,6 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::PickBucket { .. } => draw_pick(f, area, app),
         Mode::FileBrowser => draw_browser(f, area, app),
         Mode::ManageFolders => draw_manage(f, area, app),
+        Mode::BucketView(row) => draw_bucket_view(f, area, app, *row),
         Mode::Normal => {}
     }
 }
@@ -108,6 +109,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::PickBucket { .. } => "↑↓ pick · n new bucket · Enter add · Esc cancel",
         Mode::FileBrowser => "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel",
         Mode::ManageFolders => "↑↓ move · a add · x remove · r rescan · Esc close",
+        Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
         Mode::Normal => {
             "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
         }
@@ -887,7 +889,7 @@ fn overlay_block(title: &str) -> Block<'static> {
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
-    let rect = centered_rect(66, 35, area);
+    let rect = centered_rect(66, 37, area);
     f.render_widget(Clear, rect);
     let block = overlay_block("ORBIT · KEYS");
     let inner = block.inner(rect);
@@ -921,6 +923,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("b"), desc("new bucket")]),
         Line::from(vec![key("S"), desc("save current queue as a bucket")]),
         Line::from(vec![key("a"), desc("add track to a bucket")]),
+        Line::from(vec![key("o"), desc("open bucket (remove/reorder/rename tracks)")]),
         Line::from(vec![key("d / Enter"), desc("dump bucket → queue")]),
         Line::from(vec![key("x"), desc("delete bucket / remove queue item")]),
         Line::from(vec![key("c"), desc("clear queue")]),
@@ -949,6 +952,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         InputKind::Search => "SEARCH",
         InputKind::NewBucket | InputKind::NewBucketForTrack(_) => "NEW BUCKET",
         InputKind::SaveQueueAsBucket => "SAVE QUEUE AS BUCKET",
+        InputKind::RenameBucket(_) => "RENAME BUCKET",
     };
     let rect = centered_rect(54, 3, area);
     f.render_widget(Clear, rect);
@@ -1010,6 +1014,94 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_bucket_view(f: &mut Frame, area: Rect, app: &mut App, row: BucketRow) {
+    // Resolve the bucket's icon, name, color, tracks, and editability.
+    let (icon, name, color, editable, tracks): (&str, String, u8, bool, Vec<crate::model::Track>) =
+        match row {
+            BucketRow::Smart(i) => match app.smart.get(i) {
+                Some(b) => (b.icon, b.name.clone(), b.color, false, b.tracks.clone()),
+                None => return,
+            },
+            BucketRow::User(i) => match app.store.buckets.get(i) {
+                Some(b) => ("◆", b.name.clone(), b.color, true, b.tracks.clone()),
+                None => return,
+            },
+        };
+
+    let rect = centered_rect(76, (tracks.len() as u16 + 6).clamp(8, 28), area);
+    f.render_widget(Clear, rect);
+
+    let title = Line::from(vec![
+        Span::styled(
+            format!(" {icon} {name} "),
+            Style::new()
+                .fg(theme::bucket_color(color))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("· {} tracks{} ", tracks.len(), if editable { "" } else { " · auto" }),
+            Style::new().fg(theme::dim()),
+        ),
+    ]);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme::border_focus()))
+        .title(title)
+        .style(Style::new().bg(theme::panel_bg()));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
+    let inner_w = rows[0].width as usize;
+    let now_path = app.now_playing.as_ref().map(|t| t.path.clone());
+
+    if tracks.is_empty() {
+        f.render_widget(
+            Paragraph::new("(empty)").style(Style::new().fg(theme::dim()).bg(theme::panel_bg())),
+            rows[0],
+        );
+    } else {
+        let items: Vec<ListItem> = tracks
+            .iter()
+            .map(|t| {
+                let playing = now_path.as_ref() == Some(&t.path);
+                let dur = fmt_duration(t.duration());
+                let text = pad_between(&t.title_artist(), &dur, inner_w.saturating_sub(2));
+                let style = if playing {
+                    Style::new().fg(theme::gold())
+                } else {
+                    Style::new().fg(theme::fg())
+                };
+                ListItem::new(Line::from(Span::styled(text, style)))
+            })
+            .collect();
+        let list = List::new(items)
+            .highlight_style(
+                Style::new()
+                    .bg(theme::select_bg())
+                    .fg(theme::accent())
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▌ ")
+            .style(Style::new().bg(theme::panel_bg()));
+        f.render_stateful_widget(list, rows[0], &mut app.bucket_view_state);
+    }
+
+    let hint = if editable {
+        "Enter play · x remove · K/J reorder · r rename · Esc back"
+    } else {
+        "Enter play · Esc back  (auto bucket — not editable)"
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {hint}"),
+            Style::new().fg(theme::faint()),
+        )))
+        .style(Style::new().bg(theme::panel_bg())),
+        rows[1],
+    );
 }
 
 fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {

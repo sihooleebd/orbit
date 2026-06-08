@@ -82,6 +82,38 @@ impl BucketStore {
         false
     }
 
+    /// Remove a track from a bucket by track index.
+    pub fn remove_track(&mut self, bucket_idx: usize, track_idx: usize) {
+        if let Some(b) = self.buckets.get_mut(bucket_idx) {
+            if track_idx < b.tracks.len() {
+                b.tracks.remove(track_idx);
+            }
+        }
+    }
+
+    /// Move a track within a bucket by `delta` (clamped). Returns its new index.
+    pub fn move_track(&mut self, bucket_idx: usize, track_idx: usize, delta: i32) -> usize {
+        if let Some(b) = self.buckets.get_mut(bucket_idx) {
+            let len = b.tracks.len();
+            if len == 0 || track_idx >= len {
+                return track_idx;
+            }
+            let target = (track_idx as i32 + delta).clamp(0, len as i32 - 1) as usize;
+            if target != track_idx {
+                let t = b.tracks.remove(track_idx);
+                b.tracks.insert(target, t);
+            }
+            return target;
+        }
+        track_idx
+    }
+
+    pub fn rename(&mut self, bucket_idx: usize, name: String) {
+        if let Some(b) = self.buckets.get_mut(bucket_idx) {
+            b.name = name;
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.buckets.len()
     }
