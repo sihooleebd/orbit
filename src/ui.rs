@@ -884,36 +884,48 @@ fn draw_spectrum_horizontal(f: &mut Frame, area: Rect, app: &App) {
 /// and modes inside the cassette shell.
 fn draw_zen_cassette(f: &mut Frame, area: Rect, app: &App, track: &crate::model::Track) {
     let w = area.width.min(72);
-    let h = area.height.min(16);
+    let h = area.height.min(18);
     let rect = centered_rect(w, h, area);
 
     let shell = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme::accent()))
         .title(Line::from(Span::styled(
-            " ◆ ORBIT · C-90 ",
+            " ★ ORBIT · C-90 ★ ",
             Style::new().fg(theme::accent()).add_modifier(Modifier::BOLD),
         )))
-        .padding(Padding::horizontal(4))
+        .padding(Padding::new(4, 4, 1, 1))
         .style(Style::new().bg(theme::bg()));
     let inner = shell.inner(rect);
     f.render_widget(shell, rect);
 
     let rows = Layout::vertical([
-        Constraint::Length(1), // spacer
+        Constraint::Length(1), // type line
         Constraint::Length(1), // title
         Constraint::Length(1), // album
-        Constraint::Min(3),    // reels
+        Constraint::Min(5),    // reels + capstan
+        Constraint::Length(1), // status
         Constraint::Length(1), // progress
         Constraint::Length(1), // modes
-        Constraint::Length(1), // spacer
     ])
     .split(inner);
 
-    let title_w = rows[1].width as usize;
+    // Decorative format strip, à la a real cassette.
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("TYPE I", Style::new().fg(theme::dim())),
+            Span::styled("  ·  ", Style::new().fg(theme::faint())),
+            Span::styled("STEREO", Style::new().fg(theme::dim())),
+            Span::styled("  ·  ", Style::new().fg(theme::faint())),
+            Span::styled("SIDE A", Style::new().fg(theme::dim())),
+        ]))
+        .alignment(Alignment::Center),
+        rows[0],
+    );
+
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            truncate(&track.artist_title(), title_w),
+            truncate(&track.artist_title(), rows[1].width as usize),
             Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD),
         )))
         .alignment(Alignment::Center),
@@ -932,31 +944,41 @@ fn draw_zen_cassette(f: &mut Frame, area: Rect, app: &App, track: &crate::model:
 
     draw_reels(f, rows[3], app);
 
+    // Status dot.
+    let (dot_color, state) = if app.engine.is_paused() {
+        (theme::gold(), "PAUSED")
+    } else {
+        (theme::green(), "PLAYING")
+    };
     f.render_widget(
-        Paragraph::new(progress_line(rows[4].width as usize, app)),
+        Paragraph::new(Line::from(vec![
+            Span::styled("● ", Style::new().fg(dot_color)),
+            Span::styled(state, Style::new().fg(theme::fg()).add_modifier(Modifier::BOLD)),
+        ]))
+        .alignment(Alignment::Center),
         rows[4],
+    );
+
+    f.render_widget(
+        Paragraph::new(progress_line(rows[5].width as usize, app)),
+        rows[5],
     );
     f.render_widget(
         Paragraph::new(modes_line(app)).alignment(Alignment::Center),
-        rows[5],
+        rows[6],
     );
 }
 
-/// Two large spinning reels with a tape spool between them, centered in `area`.
-///
-/// Each reel is a 9×5 disk with a single spoke that rotates through four frames
-/// (—, ╲, |, ╱), reading as a turning hub. The reels advance with playback.
+/// Two octagonal spinning reels flanking a center capstan with guide rollers and
+/// a tape pancake. Reels are 9 wide × 5 tall; the spoke rotates with playback.
 fn draw_reels(f: &mut Frame, area: Rect, app: &App) {
-    // Interior spoke frames: 3 rows × 7 columns each.
+    // Interior spoke frames: 3 rows × 7 columns each, with an `o` hub.
     const FRAMES: [[&str; 3]; 4] = [
-        ["       ", " ──●── ", "       "], // —
-        [" ╲     ", "   ●   ", "     ╲ "], // ╲
-        ["   |   ", "   ●   ", "   |   "], // |
-        ["     ╱ ", "   ●   ", " ╱     "], // ╱
+        ["       ", " ──o── ", "       "], // —
+        [" ╲     ", "   o   ", "     ╲ "], // ╲
+        ["   |   ", "   o   ", "   |   "], // |
+        ["     ╱ ", "   o   ", " ╱     "], // ╱
     ];
-    const TOP: &str = " ╭─────╮ "; // 9 wide
-    const BOT: &str = " ╰──┬──╯ "; // 9 wide, tape exits the bottom centre
-    const GAP: usize = 6;
 
     let phase = (app.engine.position().as_millis() / 140) as usize;
     let fl = &FRAMES[phase % 4];
@@ -964,56 +986,76 @@ fn draw_reels(f: &mut Frame, area: Rect, app: &App) {
 
     let outline = Style::new().fg(theme::dim());
     let spoke = Style::new().fg(theme::gold()).add_modifier(Modifier::BOLD);
-    let tape = Style::new().fg(theme::toward_bg(theme::gold(), 0.35));
+    let tape = Style::new().fg(theme::toward_bg(theme::gold(), 0.3));
+    let roller = Style::new().fg(theme::accent());
 
-    // One interior row of a reel: sloped/vertical border + gold spoke interior.
-    let reel_row = |left: &'static str, interior: &str, right: &'static str| {
-        vec![
-            Span::styled(left, outline),
-            Span::styled(interior.to_string(), spoke),
-            Span::styled(right, outline),
-        ]
+    // One row of a reel (11 wide). The diagonal rows draw their line into the
+    // cell corner, so the vertical side bars are pushed one column further out
+    // than the diagonals to actually meet them — making a proper octagon.
+    let reel = |r: usize, fr: &[&str; 3]| -> Vec<Span<'static>> {
+        match r {
+            0 => vec![Span::styled("  ·─────·  ", outline)],
+            1 => vec![
+                Span::styled(" ╱", outline),
+                Span::styled(fr[0].to_string(), spoke),
+                Span::styled("╲ ", outline),
+            ],
+            2 => vec![
+                Span::styled("│ ", outline),
+                Span::styled(fr[1].to_string(), spoke),
+                Span::styled(" │", outline),
+            ],
+            3 => vec![
+                Span::styled(" ╲", outline),
+                Span::styled(fr[2].to_string(), spoke),
+                Span::styled("╱ ", outline),
+            ],
+            _ => vec![Span::styled("  ·─────·  ", outline)],
+        }
+    };
+
+    // One row of the center capstan (11 wide): rollers + a hatched tape pancake.
+    let center = |r: usize| -> Vec<Span<'static>> {
+        match r {
+            1 => vec![Span::styled("   ┌───┐   ", outline)],
+            2 => vec![
+                Span::raw(" "),
+                Span::styled("◎", roller),
+                Span::styled("─", tape),
+                Span::styled("┤", outline),
+                Span::styled("▓▒▓", tape),
+                Span::styled("├", outline),
+                Span::styled("─", tape),
+                Span::styled("◎", roller),
+                Span::raw(" "),
+            ],
+            3 => vec![Span::styled("   └───┘   ", outline)],
+            _ => vec![Span::raw("           ")], // 11 spaces
+        }
+    };
+
+    // Gap (2) between reel and capstan; the mid row carries the tape.
+    let gap = |r: usize| {
+        if r == 2 {
+            Span::styled("──", tape)
+        } else {
+            Span::raw("  ")
+        }
     };
 
     let mut lines: Vec<Line> = Vec::new();
-    let top_pad = (area.height as usize).saturating_sub(6) / 2;
+    let top_pad = (area.height as usize).saturating_sub(5) / 2;
     for _ in 0..top_pad {
         lines.push(Line::from(""));
     }
-
-    let gap_blank = Span::raw(" ".repeat(GAP));
-
-    // Row 0: rounded tops.
-    lines.push(Line::from(vec![
-        Span::styled(TOP, outline),
-        gap_blank.clone(),
-        Span::styled(TOP, outline),
-    ]));
-    // Row 1: upper slope.
-    let mut r1 = reel_row("/", fl[0], "\\");
-    r1.push(gap_blank.clone());
-    r1.extend(reel_row("/", fr[0], "\\"));
-    lines.push(Line::from(r1));
-    // Row 2: middle (hubs).
-    let mut r2 = reel_row("│", fl[1], "│");
-    r2.push(gap_blank.clone());
-    r2.extend(reel_row("│", fr[1], "│"));
-    lines.push(Line::from(r2));
-    // Row 3: lower slope.
-    let mut r3 = reel_row("\\", fl[2], "/");
-    r3.push(gap_blank.clone());
-    r3.extend(reel_row("\\", fr[2], "/"));
-    lines.push(Line::from(r3));
-    // Row 4: rounded bottoms, each with a tape tap (┬).
-    lines.push(Line::from(vec![
-        Span::styled(BOT, outline),
-        gap_blank,
-        Span::styled(BOT, outline),
-    ]));
-    // Row 5: the exposed tape running between the two reels.
-    // Reel centres sit at columns 4 and 9 + 6 + 4 = 19 of the 24-wide block.
-    let run = "─".repeat(14); // cols 5..=18
-    lines.push(Line::from(Span::styled(format!("    ╰{run}╯    "), tape)));
+    for r in 0..5 {
+        let mut spans = reel(r, fl);
+        spans.push(gap(r));
+        spans.extend(center(r));
+        spans.push(gap(r));
+        spans.extend(reel(r, fr));
+        lines.push(Line::from(spans));
+    }
 
     f.render_widget(
         Paragraph::new(Text::from(lines)).alignment(Alignment::Center),

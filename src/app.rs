@@ -1550,7 +1550,55 @@ impl App {
         }
     }
 
+    /// Zen mode accepts only the keys that make sense with the panels hidden.
+    fn handle_zen_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('z') | KeyCode::Esc => self.zen = false,
+            KeyCode::Char('q') => self.quit(),
+            KeyCode::Char(' ') => self.toggle_pause(),
+            KeyCode::Char('n') => self.next_track(),
+            KeyCode::Char('p') => self.prev_track(),
+            KeyCode::Left | KeyCode::Char('h') => self.engine.seek_relative(-5),
+            KeyCode::Right | KeyCode::Char('l') => self.engine.seek_relative(5),
+            KeyCode::Char('+') | KeyCode::Char('=') => self.change_volume(0.05),
+            KeyCode::Char('-') | KeyCode::Char('_') => self.change_volume(-0.05),
+            KeyCode::Char('s') => self.toggle_shuffle(),
+            KeyCode::Char('r') => self.cycle_repeat(),
+            KeyCode::Char('e') => {
+                self.mode = Mode::Eq;
+                let state = if self.engine.eq().enabled() {
+                    "ON"
+                } else {
+                    "OFF (x to enable)"
+                };
+                self.set_status(format!(
+                    "EQ {state} — ←→ band, ↑↓ adjust, x on/off, f flat, 1-5 presets."
+                ));
+            }
+            KeyCode::Char('E') => self.toggle_eq(),
+            KeyCode::Char('v') => {
+                self.zen_viz = self.zen_viz.next();
+                self.config.zen_viz = self.zen_viz.as_usize();
+                self.config.save().ok();
+                self.set_status(format!("Zen visualizer: {}", self.zen_viz.label()));
+            }
+            KeyCode::Char('t') => {
+                let idx = crate::theme::cycle();
+                self.config.palette = idx;
+                self.config.save().ok();
+                self.set_status(format!("Theme: {}", crate::theme::palette_name()));
+            }
+            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('i') => self.mode = Mode::About,
+            _ => {}
+        }
+    }
+
     fn handle_normal_key(&mut self, key: KeyEvent) {
+        // In zen mode only playback-relevant keys apply (panels are hidden).
+        if self.zen {
+            return self.handle_zen_key(key);
+        }
         match key.code {
             KeyCode::Char('q') => self.quit(),
             KeyCode::Tab => self.focus = self.focus.next(),
