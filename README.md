@@ -129,7 +129,7 @@ sidecar exists (previous/current/next line, current highlighted).
         █  █  █  █  █  █  █  █  █  █  █  █  █
 
         1:23 ━━━━━━●──────────────────── 4:18
-            vol ▰▰▰▰▰▱▱▱ · shuffle · repeat · EQ
+         vol ▰▰▰▰▰▱▱▱ · shuffle · repeat · EQ
 ```
 
 ### Equalizer (`e`)
