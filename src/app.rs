@@ -85,6 +85,7 @@ pub enum Mode {
     ManageFolders,
     /// Viewing/editing the tracks inside a bucket.
     BucketView(BucketRow),
+    About,
 }
 
 /// A directory browser for picking a library folder (musikcube-style).
@@ -689,6 +690,33 @@ impl App {
         self.set_status(format!("Dumped {count} tracks from “{name}” into the queue."));
     }
 
+    /// Dump the whole library (respecting the current search filter) into the queue.
+    fn dump_library(&mut self) {
+        let tracks: Vec<Track> = self
+            .library
+            .view
+            .iter()
+            .filter_map(|&i| self.library.tracks.get(i).cloned())
+            .collect();
+        if tracks.is_empty() {
+            self.set_status("Library is empty.");
+            return;
+        }
+        let was_empty = self.queue.is_empty();
+        let count = tracks.len();
+        self.queue.extend(tracks);
+        if was_empty {
+            self.queue.jump_to(0);
+            self.play_current_in_queue();
+        }
+        let scope = if self.library.filter().is_empty() {
+            "the library"
+        } else {
+            "the filtered results"
+        };
+        self.set_status(format!("Dumped {count} tracks from {scope} into the queue."));
+    }
+
     /// Append one track to the queue and start playing it immediately.
     fn enqueue_and_play(&mut self, track: Track) {
         self.queue.extend([track.clone()]);
@@ -1165,6 +1193,7 @@ impl App {
             Mode::FileBrowser => self.handle_browser_key(key),
             Mode::ManageFolders => self.handle_manage_folders_key(key),
             Mode::BucketView(_) => self.handle_bucket_view_key(key),
+            Mode::About => self.mode = Mode::Normal,
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1414,6 +1443,7 @@ impl App {
                 self.set_status(format!("Theme: {}", crate::theme::palette_name()));
             }
             KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('i') => self.mode = Mode::About,
 
             KeyCode::Char('b') => {
                 self.mode = Mode::Input(Input {
@@ -1451,11 +1481,11 @@ impl App {
                 Focus::Library => {}
             },
             KeyCode::Char('c') => self.clear_queue(),
-            KeyCode::Char('d') => {
-                if self.focus == Focus::Buckets {
-                    self.dump_selected_bucket();
-                }
-            }
+            KeyCode::Char('d') => match self.focus {
+                Focus::Buckets => self.dump_selected_bucket(),
+                Focus::Library => self.dump_library(),
+                Focus::Queue => {}
+            },
             KeyCode::Char('R') => self.start_scan(),
             KeyCode::Esc => {
                 if self.zen {

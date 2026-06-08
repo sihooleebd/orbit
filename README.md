@@ -128,8 +128,8 @@ on macOS): `config.json`, `buckets.json`, `library.json`.
 `n`/`p` next/prev · `←→`/`h l` seek ∓5s · `+`/`-` volume · `s` shuffle · `r` repeat
 
 **Buckets & queue** — `b` new bucket · `S` save queue as a bucket · `a` add track to a
-bucket · `o` open bucket (edit) · `d`/`Enter` dump bucket → queue · `x` delete bucket /
-remove queue item · `c` clear queue
+bucket · `o` open bucket (edit) · `d` dump bucket / whole library → queue · `x` delete
+bucket / remove queue item · `c` clear queue
 
 **Media keys** — your keyboard's play/pause, next, and previous keys control Orbit,
 and the current track shows in the system Now Playing panel (Control Center on macOS).
@@ -149,7 +149,7 @@ Buckets are alive, not just static lists:
 - **Edit a bucket** with `o`: open it to play, **remove** tracks (`x`), **reorder**
   them (`K`/`J`), or **rename** the bucket (`r`). Smart buckets open read-only.
 
-**Library & EQ** — `A` manage folders · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `?` help · `q` quit
+**Library & EQ** — `A` manage folders · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `i` about · `?` help · `q` quit
 
 ### Manage folders (`A`)
 
@@ -194,7 +194,15 @@ The EQ turns **on automatically** the moment you adjust a band or pick a preset,
 you don't have to remember to enable it. You can also toggle it from anywhere with
 `E`, or with `x` inside the panel. The title bar shows `ON` / `BYPASSED`.
 
-The EQ menu also shows a **live spectrum** of the currently playing audio,
-column-aligned directly above each band's gain slider, so you can see exactly
-which frequencies you're shaping. The rightmost slider is a **pre-amp** to tame
-clipping when boosting many bands. Settings persist across sessions.
+The EQ is drawn FabFilter-style: your gain settings are a **connected response
+line** over a **live spectrum** of the playing audio, so you can see exactly which
+frequencies you're shaping as you shape them. The rightmost node is a **pre-amp** to
+tame clipping when boosting many bands. Settings persist across sessions.
+
+### About (`i`)
+
+Shows Orbit's logo, version, and author in a popup. Press any key to dismiss.
+
+## License
+
+[MIT](LICENSE) © 2026 Benjamin Lee

@@ -2,6 +2,9 @@
 name = "orbit"
 version = "0.1.0"
 edition = "2024"
+description = "A beautiful local music player TUI with buckets and a graphic EQ"
+authors = ["Benjamin Lee"]
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.102"

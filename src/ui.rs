@@ -46,6 +46,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::FileBrowser => draw_browser(f, area, app),
         Mode::ManageFolders => draw_manage(f, area, app),
         Mode::BucketView(row) => draw_bucket_view(f, area, app, *row),
+        Mode::About => draw_about(f, area),
         Mode::Normal => {}
     }
 }
@@ -110,6 +111,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::FileBrowser => "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel",
         Mode::ManageFolders => "↑↓ move · a add · x remove · r rescan · Esc close",
         Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
+        Mode::About => "press any key to close",
         Mode::Normal => {
             "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
         }
@@ -889,7 +891,7 @@ fn overlay_block(title: &str) -> Block<'static> {
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
-    let rect = centered_rect(66, 37, area);
+    let rect = centered_rect(66, 38, area);
     f.render_widget(Clear, rect);
     let block = overlay_block("ORBIT · KEYS");
     let inner = block.inner(rect);
@@ -935,6 +937,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("E"), desc("toggle EQ on/off")]),
         Line::from(vec![key("z"), desc("zen mode (full-screen player + spectrum)")]),
         Line::from(vec![key("t"), desc("cycle colour theme")]),
+        Line::from(vec![key("i"), desc("about Orbit")]),
         Line::from(vec![key("q"), desc("quit")]),
     ];
 
@@ -1014,6 +1017,60 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_about(f: &mut Frame, area: Rect) {
+    const ART: [&str; 5] = [
+        r"   ____  ____  ____  __________",
+        r"  / __ \/ __ \/ __ )/  _/_  __/",
+        r" / / / / /_/ / __  |/ /  / /   ",
+        r"/ /_/ / _, _/ /_/ // /  / /    ",
+        r"\____/_/ |_/_____/___/ /_/     ",
+    ];
+
+    let rect = centered_rect(54, 16, area);
+    f.render_widget(Clear, rect);
+    let block = overlay_block("ABOUT");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let art_w = ART.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for (i, l) in ART.iter().enumerate() {
+        let color = theme::gradient(i as f32 / (ART.len() - 1) as f32);
+        lines.push(Line::from(Span::styled(
+            format!("{:<width$}", l, width = art_w),
+            Style::new().fg(color),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "ORBIT",
+        Style::new().fg(theme::accent()).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("version {}", env!("CARGO_PKG_VERSION")),
+        Style::new().fg(theme::dim()),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "a local music player TUI",
+        Style::new().fg(theme::fg()),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("by ", Style::new().fg(theme::dim())),
+        Span::styled(
+            "Benjamin Lee",
+            Style::new().fg(theme::accent2()).add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .style(Style::new().bg(theme::panel_bg())),
+        inner,
+    );
 }
 
 fn draw_bucket_view(f: &mut Frame, area: Rect, app: &mut App, row: BucketRow) {
@@ -1272,7 +1329,7 @@ fn draw_eq(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
-            Span::styled("███", Style::new().fg(theme::accent())),
+            Span::styled("━━", Style::new().fg(theme::accent())),
             Span::styled(" gain    ", Style::new().fg(theme::dim())),
             Span::styled("▒▒▒", Style::new().fg(theme::toward_bg(theme::violet(), 0.4))),
             Span::styled(" live spectrum", Style::new().fg(theme::dim())),
@@ -1352,8 +1409,8 @@ fn draw_eq(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// The merged EQ visualizer: gain bars (anchored to the 0 dB centerline) drawn
-/// on top of the live spectrum (anchored to the bottom, shaded behind).
+/// The merged EQ visualizer: the gain response drawn as a bright connected line
+/// (centered on the 0 dB axis) over the live spectrum, which fills from the bottom.
 fn draw_eq_graph(f: &mut Frame, area: Rect, app: &App) {
     let eq = app.eq();
     let max_db = app.eq_max_db();
@@ -1362,58 +1419,98 @@ fn draw_eq_graph(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let mut gains: Vec<f32> = eq.all_gains_db().to_vec();
-    gains.push(eq.preamp_db()); // preamp is the last column (no spectrum)
+    let gains = eq.all_gains_db();
+    let preamp = eq.preamp_db();
     let levels: Vec<f32> = (0..NUM_BANDS)
         .map(|i| (eq.level(i) * SPECTRUM_GAIN).clamp(0.0, 1.0))
         .collect();
 
+    // Map a dB value to a row (top = +max, bottom = -max).
+    let denom = rows.saturating_sub(1).max(1) as f32;
+    let row_of = |db: f32| -> usize {
+        let t = ((max_db - db) / (2.0 * max_db)).clamp(0.0, 1.0);
+        (t * denom).round() as usize
+    };
+    let node: Vec<usize> = (0..NUM_BANDS).map(|i| row_of(gains[i])).collect();
+    let pre_node = row_of(preamp);
+    let zero_row = row_of(0.0);
+
+    let spectrum_color =
+        |i: usize| theme::toward_bg(theme::gradient(i as f32 / (NUM_BANDS - 1) as f32), 0.55);
+    let line_color = |i: usize| {
+        if app.eq_sel == i {
+            theme::gold()
+        } else {
+            theme::gradient(i as f32 / (NUM_BANDS - 1) as f32)
+        }
+    };
+
     let mut lines: Vec<Line> = Vec::with_capacity(rows);
     for r in 0..rows {
-        // dB value at this row: +max at the top, -max at the bottom.
-        let db = max_db - (r as f32 / (rows - 1).max(1) as f32) * (2.0 * max_db);
-        let is_zero_row = db.abs() <= (max_db / rows as f32);
-        let from_bottom = (rows - 1 - r) as f32;
-
+        let from_bottom = rows - 1 - r;
         let mut spans: Vec<Span> = vec![Span::raw("  ")];
-        for (i, &g) in gains.iter().enumerate() {
-            let is_preamp = i == NUM_BANDS;
-            if is_preamp {
-                spans.push(Span::raw("  ")); // gap matching the labels row
-            }
-            let selected = app.eq_sel == i;
 
-            // Foreground: gain bar, filled between the centerline and the gain.
-            let gain_fill =
-                (g >= 0.0 && db <= g && db >= 0.0) || (g < 0.0 && db >= g && db <= 0.0);
-            // Background: live spectrum rising from the bottom.
-            let spec_fill = !is_preamp && from_bottom < levels[i] * rows as f32;
+        for i in 0..NUM_BANDS {
+            let spec_fill = (from_bottom as f32) < levels[i] * rows as f32;
 
-            let (glyph, color) = if gain_fill {
-                let c = if selected {
+            // Main 3 columns of the band cell.
+            let (mc, mcol) = if r == node[i] {
+                ('━', line_color(i))
+            } else if spec_fill {
+                ('▒', spectrum_color(i))
+            } else if r == zero_row {
+                ('─', theme::faint())
+            } else {
+                (' ', theme::panel_bg())
+            };
+            spans.push(Span::styled(
+                std::iter::repeat(mc).take(3).collect::<String>(),
+                Style::new().fg(mcol),
+            ));
+
+            // Gap column doubles as the connector lane to the next band.
+            let gap = if i + 1 < NUM_BANDS {
+                let (lo, hi) = (node[i].min(node[i + 1]), node[i].max(node[i + 1]));
+                if r == node[i] || r == node[i + 1] {
+                    Some(('━', line_color(i)))
+                } else if r > lo && r < hi {
+                    Some(('│', line_color(i)))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let (gc, gcol) = match gap {
+                Some(x) => x,
+                None if spec_fill => ('▒', spectrum_color(i)),
+                None if r == zero_row => ('─', theme::faint()),
+                None => (' ', theme::panel_bg()),
+            };
+            spans.push(Span::styled(gc.to_string(), Style::new().fg(gcol)));
+        }
+
+        // Preamp column (standalone node, no spectrum, no connector).
+        spans.push(Span::raw("  "));
+        let (pc, pcol) = if r == pre_node {
+            (
+                '━',
+                if app.eq_sel >= NUM_BANDS {
                     theme::gold()
                 } else {
-                    theme::gradient(i as f32 / NUM_BANDS as f32)
-                };
-                ("███", c)
-            } else if spec_fill {
-                let base = theme::gradient(i as f32 / (NUM_BANDS - 1) as f32);
-                let c = theme::toward_bg(base, if selected { 0.25 } else { 0.5 });
-                ("▒▒▒", c)
-            } else if is_zero_row {
-                ("───", theme::faint())
-            } else if selected {
-                (" ╎ ", theme::faint())
-            } else {
-                ("   ", theme::panel_bg())
-            };
+                    theme::violet()
+                },
+            )
+        } else if r == zero_row {
+            ('─', theme::faint())
+        } else {
+            (' ', theme::panel_bg())
+        };
+        spans.push(Span::styled(
+            std::iter::repeat(pc).take(5).collect::<String>(),
+            Style::new().fg(pcol),
+        ));
 
-            let width = if is_preamp { 5 } else { 4 };
-            spans.push(Span::styled(
-                format!("{:^width$}", glyph, width = width),
-                Style::new().fg(color),
-            ));
-        }
         lines.push(Line::from(spans));
     }
 
