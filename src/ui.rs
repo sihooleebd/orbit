@@ -991,9 +991,10 @@ fn draw_reels(f: &mut Frame, area: Rect, app: &App) {
     let tape = Style::new().fg(theme::toward_bg(theme::gold(), 0.3));
     let roller = Style::new().fg(theme::accent());
 
-    // One row of a reel (11 wide). The diagonal rows draw their line into the
-    // cell corner, so the vertical side bars are pushed one column further out
-    // than the diagonals to actually meet them — making a proper octagon.
+    // One row of a reel (11 wide). The side bars use the left-edge vertical `⎸`
+    // (well-supported; the right-edge `⎹` renders inconsistently). The left bar
+    // sits at col 1's left edge, the right bar at col 10's left edge — i.e. the
+    // right edge of the diagonal column — so both meet the diagonals' corners.
     let reel = |r: usize, fr: &[&str; 3]| -> Vec<Span<'static>> {
         match r {
             0 => vec![Span::styled("  ·─────·  ", outline)],
@@ -1003,9 +1004,9 @@ fn draw_reels(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled("╲ ", outline),
             ],
             2 => vec![
-                Span::styled("│ ", outline),
+                Span::styled(" ⎸", outline),
                 Span::styled(fr[1].to_string(), spoke),
-                Span::styled(" │", outline),
+                Span::styled(" ⎸", outline),
             ],
             3 => vec![
                 Span::styled(" ╲", outline),
