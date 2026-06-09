@@ -23,6 +23,56 @@ pub enum Focus {
     Queue,
 }
 
+/// Main-loop ticks per second (the loop ticks every 50ms).
+const TICKS_PER_SEC: u32 = 20;
+
+/// Sleep-timer state.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Sleep {
+    Off,
+    /// Counting down; `ticks` remaining, `mins` is the chosen preset.
+    Timed { ticks: u32, mins: u32 },
+    EndOfTrack,
+}
+
+impl Sleep {
+    fn timed(mins: u32) -> Self {
+        Sleep::Timed {
+            ticks: mins * 60 * TICKS_PER_SEC,
+            mins,
+        }
+    }
+
+    /// Cycle: Off → 15 → 30 → 45 → 60 → End of track → Off.
+    fn cycled(self) -> Self {
+        match self {
+            Sleep::Off => Sleep::timed(15),
+            Sleep::Timed { mins, .. } => match mins {
+                15 => Sleep::timed(30),
+                30 => Sleep::timed(45),
+                45 => Sleep::timed(60),
+                _ => Sleep::EndOfTrack,
+            },
+            Sleep::EndOfTrack => Sleep::Off,
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Sleep::Off => "off".to_string(),
+            Sleep::EndOfTrack => "end of track".to_string(),
+            Sleep::Timed { ticks, .. } => {
+                let secs = ticks / TICKS_PER_SEC;
+                format!("{}:{:02}", secs / 60, secs % 60)
+            }
+        }
+    }
+
+    pub fn is_active(self) -> bool {
+        !matches!(self, Sleep::Off)
+    }
+}
+
 /// The zen-mode visualizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZenViz {
@@ -135,6 +185,8 @@ pub enum Mode {
     Confirm { prompt: String, action: ConfirmAction },
     /// Live theme picker; `original` is restored on cancel.
     ThemePicker { original: usize },
+    /// The unified settings hub.
+    Settings,
 }
 
 
@@ -232,8 +284,13 @@ pub struct App {
 
     pub status: String,
     pub status_is_error: bool,
+    /// Ticks since the status was last set (for auto-clearing to a default).
+    status_age: u32,
     pub spinner_frame: usize,
     pub should_quit: bool,
+
+    /// Sleep-timer state.
+    pub sleep: Sleep,
 
     /// Zen mode: hide all panels and show only the full-screen player.
     pub zen: bool,
@@ -249,6 +306,13 @@ pub struct App {
     pub bucket_view_state: ListState,
     /// Selection state for the theme picker.
     pub theme_state: ListState,
+    /// Scroll offset (rows) for the help overlay.
+    pub help_scroll: u16,
+    /// Selection state for the settings panel.
+    pub settings_state: ListState,
+    /// True when the EQ / theme picker was opened from the settings panel, so
+    /// closing it returns there instead of to Normal.
+    from_settings: bool,
 
     /// Synced lyrics for the current track, if a .lrc sidecar exists.
     pub lyrics: Option<crate::media::Lyrics>,
@@ -311,8 +375,10 @@ impl App {
             scan_count: 0,
             status: String::new(),
             status_is_error: false,
+            status_age: 0,
             spinner_frame: 0,
             should_quit: false,
+            sleep: Sleep::Off,
             zen: false,
             zen_viz: ZenViz::from_usize(config_zen_viz),
             browser: None,
@@ -320,6 +386,9 @@ impl App {
             folders_state: ListState::default(),
             bucket_view_state: ListState::default(),
             theme_state: ListState::default(),
+            help_scroll: 0,
+            settings_state: ListState::default(),
+            from_settings: false,
             lyrics: None,
             remote: crate::remote::Remote::new(),
         };
@@ -425,11 +494,18 @@ impl App {
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
         self.status_is_error = false;
+        self.status_age = 0;
     }
 
     pub fn set_error(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
         self.status_is_error = true;
+        self.status_age = 0;
+    }
+
+    /// The idle footer text once a transient status has expired.
+    fn default_status() -> String {
+        format!("◈ Orbit v{}", env!("CARGO_PKG_VERSION"))
     }
 
     // -- scanning ----------------------------------------------------------
@@ -530,6 +606,35 @@ impl App {
             self.engine.eq().decay_levels(0.80);
         }
 
+        // Sleep-timer countdown (timed presets only; end-of-track is handled on finish).
+        if let Sleep::Timed { ticks, mins } = self.sleep {
+            let rem = ticks.saturating_sub(1);
+            // Fade the output over the final 5 seconds.
+            const FADE: u32 = 5 * TICKS_PER_SEC;
+            if rem <= FADE {
+                let f = rem as f32 / FADE as f32;
+                self.engine.set_output_volume(self.engine.volume() * f);
+            }
+            if rem == 0 {
+                self.engine.restore_volume();
+                if !self.engine.is_paused() {
+                    self.toggle_pause();
+                }
+                self.sleep = Sleep::Off;
+                self.set_status("Sleep timer — paused playback. 🌙");
+            } else {
+                self.sleep = Sleep::Timed { ticks: rem, mins };
+            }
+        }
+
+        // Auto-clear a transient status back to the idle default.
+        const STATUS_TTL: u32 = 5 * TICKS_PER_SEC;
+        self.status_age = self.status_age.saturating_add(1);
+        if self.status_age == STATUS_TTL {
+            self.status = Self::default_status();
+            self.status_is_error = false;
+        }
+
         // Apply any OS media-control commands (media keys / Now Playing).
         self.process_remote();
     }
@@ -555,6 +660,19 @@ impl App {
 
     fn on_track_finished(&mut self) {
         self.seen_progress = false;
+
+        // Sleep timer set to "end of track" — stop here instead of advancing.
+        if self.sleep == Sleep::EndOfTrack {
+            self.sleep = Sleep::Off;
+            self.expect_playing = false;
+            self.now_playing = None;
+            self.update_media();
+            self.update_remote();
+            self.engine.stop();
+            self.set_status("Sleep timer — stopped at end of track. 🌙");
+            return;
+        }
+
         match self.queue.advance() {
             Some(track) => {
                 let track = track.clone();
@@ -1081,7 +1199,6 @@ impl App {
         let original = crate::theme::active_index();
         self.theme_state.select(Some(original));
         self.mode = Mode::ThemePicker { original };
-        self.set_status("Pick a theme — ↑↓ preview, Enter apply, Esc cancel.");
     }
 
     fn handle_theme_picker_key(&mut self, key: KeyEvent) {
@@ -1106,12 +1223,12 @@ impl App {
                 crate::theme::set_palette(cur);
                 self.config.palette = cur;
                 self.config.save().ok();
-                self.mode = Mode::Normal;
                 self.set_status(format!("Theme: {}", crate::theme::palette_name()));
+                self.close_overlay();
             }
             KeyCode::Esc | KeyCode::Char('q') => {
                 crate::theme::set_palette(original); // revert
-                self.mode = Mode::Normal;
+                self.close_overlay();
             }
             _ => {}
         }
@@ -1439,6 +1556,29 @@ impl App {
             return;
         }
 
+        // Global playback controls work from any screen — except while typing in
+        // an Input, or the About card (which closes on any key).
+        if !matches!(self.mode, Mode::Input(_) | Mode::About) {
+            match key.code {
+                KeyCode::Char(' ') => return self.toggle_pause(),
+                KeyCode::Char('E') => return self.toggle_eq(),
+                KeyCode::Char('+') | KeyCode::Char('=') => return self.change_volume(0.05),
+                KeyCode::Char('-') | KeyCode::Char('_') => return self.change_volume(-0.05),
+                _ => {}
+            }
+        }
+        // next/prev are global too, except where the `n` key is meaningful.
+        if !matches!(
+            self.mode,
+            Mode::Input(_) | Mode::About | Mode::PickBucket { .. } | Mode::Confirm { .. }
+        ) {
+            match key.code {
+                KeyCode::Char('n') => return self.next_track(),
+                KeyCode::Char('p') => return self.prev_track(),
+                _ => {}
+            }
+        }
+
         match &self.mode {
             Mode::Input(_) => self.handle_input_key(key),
             Mode::PickBucket { .. } => self.handle_pick_key(key),
@@ -1450,6 +1590,7 @@ impl App {
             Mode::About => self.mode = Mode::Normal,
             Mode::Confirm { .. } => self.handle_confirm_key(key),
             Mode::ThemePicker { .. } => self.handle_theme_picker_key(key),
+            Mode::Settings => self.handle_settings_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1570,7 +1711,7 @@ impl App {
             KeyCode::PageDown => self.browser_move(10),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.browser_open_selected(),
             KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => self.browser_up(),
-            KeyCode::Char('a') | KeyCode::Char(' ') => self.browser_add(),
+            KeyCode::Char('a') => self.browser_add(),
             KeyCode::Char('.') => self.browser_toggle_hidden(),
             _ => {}
         }
@@ -1611,13 +1752,97 @@ impl App {
     fn handle_help_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Down | KeyCode::Char('j') => self.help_scroll = self.help_scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => self.help_scroll = self.help_scroll.saturating_sub(1),
+            KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(8),
+            KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(8),
+            KeyCode::Home | KeyCode::Char('g') => self.help_scroll = 0,
+            _ => {}
+        }
+    }
+
+    fn open_help(&mut self) {
+        self.help_scroll = 0;
+        self.mode = Mode::Help;
+    }
+
+    // -- settings ----------------------------------------------------------
+
+    /// Number of rows in the settings panel.
+    pub const SETTINGS_ROWS: usize = 5;
+
+    fn cycle_sleep(&mut self) {
+        self.engine.restore_volume(); // undo any in-progress fade
+        self.sleep = self.sleep.cycled();
+        self.set_status(match self.sleep {
+            Sleep::Off => "Sleep timer off.".to_string(),
+            Sleep::EndOfTrack => "Sleep timer: stop at end of track.".to_string(),
+            Sleep::Timed { mins, .. } => format!("Sleep timer: {mins} min."),
+        });
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_state.select(Some(0));
+        self.mode = Mode::Settings;
+    }
+
+    fn handle_settings_key(&mut self, key: KeyEvent) {
+        let cur = self.settings_state.selected().unwrap_or(0);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char(',') => self.mode = Mode::Normal,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.settings_state.select(Some(cur.saturating_sub(1)));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.settings_state
+                    .select(Some((cur + 1).min(Self::SETTINGS_ROWS - 1)));
+            }
+            KeyCode::Enter | KeyCode::Left | KeyCode::Right => {
+                self.activate_setting(cur);
+            }
+            _ => {}
+        }
+    }
+
+    /// Close a settings sub-overlay (EQ / theme), returning to Settings if it
+    /// was opened from there, otherwise to Normal.
+    fn close_overlay(&mut self) {
+        self.mode = if self.from_settings {
+            Mode::Settings
+        } else {
+            Mode::Normal
+        };
+        self.from_settings = false;
+    }
+
+    fn activate_setting(&mut self, idx: usize) {
+        match idx {
+            0 => {
+                // Equalizer.
+                self.from_settings = true;
+                self.mode = Mode::Eq;
+            }
+            1 => {
+                self.from_settings = true;
+                self.open_theme_picker();
+            }
+            2 => {
+                self.zen_viz = self.zen_viz.next();
+                self.config.zen_viz = self.zen_viz.as_usize();
+                self.config.save().ok();
+            }
+            3 => {
+                self.config.footer_hints = !self.config.footer_hints;
+                self.config.save().ok();
+            }
+            4 => self.cycle_sleep(),
             _ => {}
         }
     }
 
     fn handle_eq_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('e') | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Esc | KeyCode::Char('e') | KeyCode::Char('q') => self.close_overlay(),
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.eq_sel == 0 {
                     self.eq_sel = NUM_BANDS; // wrap to preamp
@@ -1634,7 +1859,7 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') => self.eq_adjust(1.0),
             KeyCode::Down | KeyCode::Char('j') => self.eq_adjust(-1.0),
-            KeyCode::Char('x') => {
+            KeyCode::Char('x') | KeyCode::Char('E') => {
                 self.engine.eq().toggle_enabled();
                 self.save_eq();
                 let on = self.engine.eq().enabled();
@@ -1665,15 +1890,8 @@ impl App {
             KeyCode::Char('s') => self.toggle_shuffle(),
             KeyCode::Char('r') => self.cycle_repeat(),
             KeyCode::Char('e') => {
+                self.from_settings = false;
                 self.mode = Mode::Eq;
-                let state = if self.engine.eq().enabled() {
-                    "ON"
-                } else {
-                    "OFF (x to enable)"
-                };
-                self.set_status(format!(
-                    "EQ {state} — ←→ band, ↑↓ adjust, x on/off, f flat, 1-5 presets."
-                ));
             }
             KeyCode::Char('E') => self.toggle_eq(),
             KeyCode::Char('v') => {
@@ -1682,8 +1900,8 @@ impl App {
                 self.config.save().ok();
                 self.set_status(format!("Zen visualizer: {}", self.zen_viz.label()));
             }
-            KeyCode::Char('t') => self.open_theme_picker(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char(',') => self.open_settings(),
+            KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('i') => self.mode = Mode::About,
             _ => {}
         }
@@ -1728,11 +1946,8 @@ impl App {
             KeyCode::Char('r') => self.cycle_repeat(),
 
             KeyCode::Char('e') => {
+                self.from_settings = false;
                 self.mode = Mode::Eq;
-                let state = if self.engine.eq().enabled() { "ON" } else { "OFF (x to enable)" };
-                self.set_status(format!(
-                    "EQ {state} — ←→ band, ↑↓ adjust, x on/off, f flat, 1-5 presets."
-                ));
             }
             KeyCode::Char('E') => self.toggle_eq(),
             KeyCode::Char('z') => {
@@ -1743,14 +1958,14 @@ impl App {
                     "Zen mode off."
                 });
             }
-            KeyCode::Char('t') => self.open_theme_picker(),
+            KeyCode::Char(',') => self.open_settings(),
             KeyCode::Char('v') => {
                 self.zen_viz = self.zen_viz.next();
                 self.config.zen_viz = self.zen_viz.as_usize();
                 self.config.save().ok();
                 self.set_status(format!("Zen visualizer: {}", self.zen_viz.label()));
             }
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('i') => self.mode = Mode::About,
 
             KeyCode::Char('b') => {

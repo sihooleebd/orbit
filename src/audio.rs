@@ -570,6 +570,17 @@ impl Engine {
         self.player.set_volume(self.volume);
     }
 
+    /// Set the live output volume without changing the stored volume (used for
+    /// the sleep-timer fade-out).
+    pub fn set_output_volume(&self, v: f32) {
+        self.player.set_volume(v.clamp(0.0, 1.25));
+    }
+
+    /// Restore the live output volume to the stored value.
+    pub fn restore_volume(&self) {
+        self.player.set_volume(self.volume);
+    }
+
     pub fn nudge_volume(&mut self, delta: f32) {
         let v = self.volume + delta;
         self.set_volume(v);

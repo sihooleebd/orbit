@@ -27,6 +27,8 @@ pub struct Config {
     pub palette: usize,
     /// Zen visualizer: 0 = spectrum, 1 = cassette.
     pub zen_viz: usize,
+    /// Show the key-hint strip in the footer.
+    pub footer_hints: bool,
 }
 
 impl Default for Config {
@@ -41,6 +43,7 @@ impl Default for Config {
             shuffle: false,
             palette: 0,
             zen_viz: 0,
+            footer_hints: true,
         }
     }
 }

@@ -106,7 +106,7 @@ Ten built-in palettes — press `t` for a live picker:
 
 **Buckets** — `b` new · `S` save queue · `a` add track · `o` open/edit · `d` dump · `x` delete/remove · `c` clear queue
 
-**Library & EQ** — `A` folders · `R` rescan · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `t` theme · `i` about · `?` help · `q` quit
+**Player & more** — `A` folders · `R` rescan · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `,` settings · `i` about · `?` help · `q` quit
 
 ## Features
 
@@ -127,7 +127,9 @@ Ten built-in palettes — press `t` for a live picker:
 - **Zen mode** (`z`) — full-screen player with synced `.lrc` lyrics and two
   visualizers (`v`): a live audio spectrum or an animated cassette deck.
 
-- **Themes** (`t`) — ten palettes with a live preview picker, saved across sessions.
+- **Settings** (`,`) — one hub for the **equalizer**, the **theme** picker (ten
+  palettes, live preview, saved), the zen visualizer, a **sleep timer**
+  (15/30/45/60 min or end-of-track, with a fade-out), and a footer-hints toggle.
 
 - **OS integration** — hardware media keys and the system Now Playing panel
   (Control Center / MPRIS / SMTC).

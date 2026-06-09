@@ -39,7 +39,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     match &app.mode {
-        Mode::Help => draw_help(f, area),
+        Mode::Help => draw_help(f, area, app),
         Mode::Eq => draw_eq(f, area, app),
         Mode::Input(_) => draw_input(f, area, app),
         Mode::PickBucket { .. } => draw_pick(f, area, app),
@@ -49,6 +49,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::About => draw_about(f, area),
         Mode::Confirm { prompt, .. } => draw_confirm(f, area, prompt),
         Mode::ThemePicker { .. } => draw_theme_picker(f, area, app),
+        Mode::Settings => draw_settings(f, area, app),
         Mode::Normal => {}
     }
 }
@@ -65,19 +66,22 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(" ◈ ", Style::new().fg(theme::accent2())),
         Span::styled(
             "ORBIT",
-            Style::new()
-                .fg(theme::accent())
-                .add_modifier(Modifier::BOLD),
+            Style::new().fg(theme::accent()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  local music", Style::new().fg(theme::dim())),
     ]);
     f.render_widget(
         Paragraph::new(brand).style(Style::new().bg(theme::bg())),
         halves[0],
     );
 
-    // Right side: scan status / library size + EQ indicator.
+    // Right side: optional sleep indicator + scan status / library size.
     let mut right: Vec<Span> = Vec::new();
+    if app.sleep.is_active() {
+        right.push(Span::styled(
+            format!("🌙 {}  ", app.sleep.label()),
+            Style::new().fg(theme::violet()),
+        ));
+    }
     if app.scanning {
         let frame = SPINNER[app.spinner_frame % SPINNER.len()];
         right.push(Span::styled(
@@ -86,16 +90,10 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         ));
     } else {
         right.push(Span::styled(
-            format!("{} tracks  ", app.library.tracks.len()),
+            format!("{} tracks ", app.library.tracks.len()),
             Style::new().fg(theme::dim()),
         ));
     }
-    let eq = app.eq();
-    let eq_color = if eq.enabled() { theme::green() } else { theme::faint() };
-    right.push(Span::styled(
-        format!("EQ:{} ", if eq.enabled() { "on" } else { "off" }),
-        Style::new().fg(eq_color),
-    ));
     f.render_widget(
         Paragraph::new(Line::from(right))
             .alignment(Alignment::Right)
@@ -106,8 +104,9 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hint = match app.mode {
-        Mode::Eq => "←→ band · ↑↓ gain · x bypass · f flat · 1-5 presets · Esc close",
-        Mode::Help => "Esc close",
+        // EQ and theme picker label their own controls inside the panel.
+        Mode::Eq | Mode::ThemePicker { .. } => "",
+        Mode::Help => "↑↓ scroll · Esc close",
         Mode::Input(_) => "type · Enter confirm · Esc cancel",
         Mode::PickBucket { .. } => "↑↓ pick · n new bucket · Enter add · Esc cancel",
         Mode::FileBrowser => "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel",
@@ -115,10 +114,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
         Mode::About => "press any key to close",
         Mode::Confirm { .. } => "y confirm · n / Esc cancel",
-        Mode::ThemePicker { .. } => "↑↓ preview · Enter apply · Esc cancel",
-        Mode::Normal => {
-            "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
-        }
+        Mode::Settings => "↑↓ move · Enter change · Esc close",
+        Mode::Normal => "Space pause · ? keys · q quit",
     };
 
     let halves = Layout::horizontal([Constraint::Percentage(58), Constraint::Percentage(42)])
@@ -137,15 +134,20 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         .style(Style::new().bg(theme::bg())),
         halves[0],
     );
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("{hint} "),
-            Style::new().fg(theme::faint()),
-        )))
-        .alignment(Alignment::Right)
-        .style(Style::new().bg(theme::bg())),
-        halves[1],
-    );
+
+    // Footer hints are fully toggleable — when off, no mode shows them.
+    let show_hint = app.config.footer_hints && !hint.is_empty();
+    if show_hint {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("{hint} "),
+                Style::new().fg(theme::faint()),
+            )))
+            .alignment(Alignment::Right)
+            .style(Style::new().bg(theme::bg())),
+            halves[1],
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,15 +1127,9 @@ fn overlay_block(title: &str) -> Block<'static> {
         .style(Style::new().bg(theme::panel_bg()))
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
-    let rect = centered_rect(66, 39, area);
-    f.render_widget(Clear, rect);
-    let block = overlay_block("ORBIT · KEYS");
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
-
+fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
     let key = |k: &str| Span::styled(format!("  {k:<10}"), Style::new().fg(theme::accent()));
-    let desc = |d: &str| Span::styled(d.to_string(), Style::new().fg(theme::fg()));
+    let desc = |d: &str| Span::styled(d.to_string(), Style::new().fg(theme::dim()));
     let head = |h: &str| {
         Line::from(Span::styled(
             format!(" {h}"),
@@ -1146,10 +1142,11 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("Tab/⇧Tab"), desc("cycle panes")]),
         Line::from(vec![key("↑↓ j k"), desc("move selection")]),
         Line::from(vec![key("g / G"), desc("top / bottom")]),
+        Line::from(vec![key("Enter"), desc("open folder / play / dump bucket")]),
+        Line::from(vec![key("⌫"), desc("up a folder (Library)")]),
         Line::from(vec![key("/"), desc("search library")]),
         Line::from(""),
         head("PLAYBACK"),
-        Line::from(vec![key("Enter"), desc("play track / dump bucket / play queue item")]),
         Line::from(vec![key("Space"), desc("play / pause")]),
         Line::from(vec![key("n / p"), desc("next / previous")]),
         Line::from(vec![key("← → h l"), desc("seek ∓5s")]),
@@ -1160,25 +1157,43 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("b"), desc("new bucket")]),
         Line::from(vec![key("S"), desc("save current queue as a bucket")]),
         Line::from(vec![key("a"), desc("add track to a bucket")]),
-        Line::from(vec![key("o"), desc("open bucket (remove/reorder/rename tracks)")]),
-        Line::from(vec![key("d / Enter"), desc("dump bucket → queue")]),
+        Line::from(vec![key("o"), desc("open bucket (remove/reorder/rename)")]),
+        Line::from(vec![key("d"), desc("dump bucket / library → queue")]),
         Line::from(vec![key("x"), desc("delete bucket / remove queue item")]),
         Line::from(vec![key("c"), desc("clear queue")]),
         Line::from(vec![key(""), desc("smart buckets (↻ ★ ◷) fill themselves")]),
         Line::from(""),
-        head("LIBRARY & EQ"),
-        Line::from(vec![key("A / R"), desc("manage library folders / rescan")]),
-        Line::from(vec![key("e"), desc("open equalizer (x enables it inside)")]),
-        Line::from(vec![key("E"), desc("toggle EQ on/off")]),
+        head("LIBRARY"),
+        Line::from(vec![key("A"), desc("manage library folders")]),
+        Line::from(vec![key("R"), desc("rescan")]),
+        Line::from(""),
+        head("PLAYER"),
         Line::from(vec![key("z"), desc("zen mode (full-screen player)")]),
         Line::from(vec![key("v"), desc("cycle zen visualizer (spectrum / cassette)")]),
-        Line::from(vec![key("t"), desc("theme picker")]),
+        Line::from(vec![key("e"), desc("equalizer  ·  E toggles it on/off")]),
+        Line::from(""),
+        head("SETTINGS & MORE"),
+        Line::from(vec![key(","), desc("settings — theme · EQ · footer hints")]),
         Line::from(vec![key("i"), desc("about Orbit")]),
+        Line::from(vec![key("?"), desc("this help (↑↓ to scroll)")]),
         Line::from(vec![key("q"), desc("quit")]),
     ];
 
+    // Fit when there's room; otherwise cap and scroll.
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let rect = centered_rect(66, height, area);
+    f.render_widget(Clear, rect);
+    let block = overlay_block("ORBIT · KEYS");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
+    app.help_scroll = app.help_scroll.min(max_scroll);
+
     f.render_widget(
-        Paragraph::new(Text::from(lines)).style(Style::new().bg(theme::panel_bg())),
+        Paragraph::new(Text::from(lines))
+            .scroll((app.help_scroll, 0))
+            .style(Style::new().bg(theme::panel_bg())),
         inner,
     );
 }
@@ -1239,7 +1254,7 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .map(|b| {
             ListItem::new(Line::from(Span::styled(
                 format!("◆ {}  ({})", b.name, b.tracks.len()),
-                Style::new().fg(theme::fg()),
+                Style::new().fg(theme::dim()),
             )))
         })
         .collect();
@@ -1253,6 +1268,53 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_settings(f: &mut Frame, area: Rect, app: &mut App) {
+    let rows: [(&str, String); 5] = [
+        (
+            "Equalizer",
+            if app.eq().enabled() { "on ›" } else { "bypassed ›" }.to_string(),
+        ),
+        ("Theme", format!("{} ›", theme::palette_name())),
+        ("Zen visualizer", app.zen_viz.label().to_string()),
+        (
+            "Footer key hints",
+            if app.config.footer_hints { "on" } else { "off" }.to_string(),
+        ),
+        ("Sleep timer", app.sleep.label()),
+    ];
+
+    let rect = centered_rect(52, rows.len() as u16 + 4, area);
+    f.render_widget(Clear, rect);
+    let block = overlay_block("SETTINGS");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let inner_w = inner.width.saturating_sub(2) as usize;
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|(label, value)| {
+            let left = format!("  {label}");
+            let gap = inner_w.saturating_sub(dw(&left) + dw(value) + 1);
+            ListItem::new(Line::from(vec![
+                Span::styled(left, Style::new().fg(theme::dim())),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(value.clone(), Style::new().fg(theme::accent())),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::new()
+                .bg(theme::select_bg())
+                .fg(theme::accent())
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▌ ")
+        .style(Style::new().bg(theme::panel_bg()));
+    f.render_stateful_widget(list, inner, &mut app.settings_state);
 }
 
 fn draw_theme_picker(f: &mut Frame, area: Rect, app: &mut App) {
@@ -1270,7 +1332,7 @@ fn draw_theme_picker(f: &mut Frame, area: Rect, app: &mut App) {
             let swatch = [p.accent, p.accent2, p.violet, p.gold, p.green];
             let mut spans: Vec<Span> = vec![Span::styled(
                 format!(" {:<12}", p.name),
-                Style::new().fg(theme::fg()),
+                Style::new().fg(theme::dim()),
             )];
             for c in swatch {
                 spans.push(Span::styled("▆", Style::new().fg(c)));
@@ -1283,6 +1345,7 @@ fn draw_theme_picker(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_style(
             Style::new()
                 .bg(theme::select_bg())
+                .fg(theme::accent())
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▌ ")
@@ -1362,7 +1425,7 @@ fn draw_about(f: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "a local music player TUI",
-        Style::new().fg(theme::fg()),
+        Style::new().fg(theme::dim()),
     )));
     lines.push(Line::from(vec![
         Span::styled("by ", Style::new().fg(theme::dim())),
@@ -1417,14 +1480,13 @@ fn draw_bucket_view(f: &mut Frame, area: Rect, app: &mut App, row: BucketRow) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-    let inner_w = rows[0].width as usize;
+    let inner_w = inner.width as usize;
     let now_path = app.now_playing.as_ref().map(|t| t.path.clone());
 
     if tracks.is_empty() {
         f.render_widget(
             Paragraph::new("(empty)").style(Style::new().fg(theme::dim()).bg(theme::panel_bg())),
-            rows[0],
+            inner,
         );
     } else {
         let items: Vec<ListItem> = tracks
@@ -1436,7 +1498,7 @@ fn draw_bucket_view(f: &mut Frame, area: Rect, app: &mut App, row: BucketRow) {
                 let style = if playing {
                     Style::new().fg(theme::gold())
                 } else {
-                    Style::new().fg(theme::fg())
+                    Style::new().fg(theme::dim())
                 };
                 ListItem::new(Line::from(Span::styled(text, style)))
             })
@@ -1450,22 +1512,8 @@ fn draw_bucket_view(f: &mut Frame, area: Rect, app: &mut App, row: BucketRow) {
             )
             .highlight_symbol("▌ ")
             .style(Style::new().bg(theme::panel_bg()));
-        f.render_stateful_widget(list, rows[0], &mut app.bucket_view_state);
+        f.render_stateful_widget(list, inner, &mut app.bucket_view_state);
     }
-
-    let hint = if editable {
-        "Enter play · x remove · K/J reorder · r rename · Esc back"
-    } else {
-        "Enter play · Esc back  (auto bucket — not editable)"
-    };
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {hint}"),
-            Style::new().fg(theme::faint()),
-        )))
-        .style(Style::new().bg(theme::panel_bg())),
-        rows[1],
-    );
 }
 
 fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {
@@ -1479,14 +1527,13 @@ fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    let rows = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
     let inner_w = inner.width.saturating_sub(2) as usize;
 
     if app.config.roots.is_empty() {
         f.render_widget(
             Paragraph::new("No folders yet — press 'a' to add one.")
                 .style(Style::new().fg(theme::dim()).bg(theme::panel_bg())),
-            rows[0],
+            inner,
         );
     } else {
         let items: Vec<ListItem> = app
@@ -1498,7 +1545,7 @@ fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {
                     Span::styled("▸ ", Style::new().fg(theme::accent2())),
                     Span::styled(
                         truncate(&p.display().to_string(), inner_w.saturating_sub(2)),
-                        Style::new().fg(theme::fg()),
+                        Style::new().fg(theme::dim()),
                     ),
                 ]))
             })
@@ -1512,23 +1559,8 @@ fn draw_manage(f: &mut Frame, area: Rect, app: &mut App) {
             )
             .highlight_symbol("▌ ")
             .style(Style::new().bg(theme::panel_bg()));
-        f.render_stateful_widget(list, rows[0], &mut app.folders_state);
+        f.render_stateful_widget(list, inner, &mut app.folders_state);
     }
-
-    let hint = Line::from(vec![
-        Span::styled(" a ", Style::new().fg(theme::accent())),
-        Span::styled("add   ", Style::new().fg(theme::dim())),
-        Span::styled("x ", Style::new().fg(theme::accent())),
-        Span::styled("remove   ", Style::new().fg(theme::dim())),
-        Span::styled("r ", Style::new().fg(theme::accent())),
-        Span::styled("rescan   ", Style::new().fg(theme::dim())),
-        Span::styled("Esc ", Style::new().fg(theme::accent())),
-        Span::styled("close", Style::new().fg(theme::dim())),
-    ]);
-    f.render_widget(
-        Paragraph::new(hint).style(Style::new().bg(theme::panel_bg())),
-        rows[1],
-    );
 }
 
 fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
@@ -1564,7 +1596,7 @@ fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
             Span::styled("▸ ", Style::new().fg(theme::accent2())),
             Span::styled(
                 truncate(&format!("{name}/"), inner_w.saturating_sub(2)),
-                Style::new().fg(theme::fg()),
+                Style::new().fg(theme::dim()),
             ),
         ])));
     }
