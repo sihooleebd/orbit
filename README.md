@@ -4,18 +4,38 @@
  / / / / /_/ / __  |/ /  / /   
 / /_/ / _, _/ /_/ // /  / /    
 \____/_/ |_/_____/___/ /_/     
-```                               
+```
+
 # ◈ Orbit
 
-A beautiful local **music player TUI** with **buckets** (playlists you dump into the
-queue) and a real-time **10-band graphic equalizer**. Plays **MP3, FLAC, WAV, OGG,
-M4A/MP4, and AAC**.
+A beautiful local **music player TUI** — playlists you call **buckets** and dump into
+the queue, a real-time **10-band graphic equalizer**, and a full-screen zen mode.
+Plays MP3, FLAC, WAV, OGG, M4A/MP4, and AAC.
 
-Built in Rust with [ratatui](https://ratatui.rs) for rendering and
-[rodio](https://github.com/RustAudio/rodio) for playback. The EQ is a hand-rolled
-cascade of RBJ peaking biquad filters applied to the decoded audio stream, with
-band gains you can move live while music plays. Integrates with your OS media keys
-and the system Now Playing panel.
+Built in Rust with [ratatui](https://ratatui.rs) and
+[rodio](https://github.com/RustAudio/rodio). Runs on macOS, Linux, and Windows, with
+hardware media-key and system Now Playing integration.
+
+## Install
+
+From the repo (any Rust toolchain):
+
+```sh
+cargo install --git https://github.com/sihooleebd/orbit
+```
+
+Or from a local clone — re-run with `--force` to update:
+
+```sh
+cargo install --path . --root ~/.local
+```
+
+**Linux** also needs ALSA + D-Bus development packages:
+
+```sh
+sudo apt install libasound2-dev libdbus-1-dev pkg-config        # Debian/Ubuntu
+sudo dnf install alsa-lib-devel dbus-devel pkgconf-pkg-config   # Fedora
+```
 
 ## Run
 
@@ -23,83 +43,13 @@ and the system Now Playing panel.
 cargo run --release
 ```
 
-On first launch Orbit adopts your **Music** folder as a library root if it exists.
-Add more folders any time with `A`. Your library is cached so subsequent launches
-are instant; press `R` to rescan.
-
-The Library pane is **browsable by folder**: `Enter` opens a subfolder, `⌫` goes back
-up, and `d` dumps the current folder into the queue. Search (`/`) spans the whole
-library regardless of folder. Destructive actions (clearing the queue, deleting a
-bucket, removing a folder) ask for a **y/n confirmation** first.
-
-## Platform support
-
-Orbit runs on **macOS, Linux, and Windows**. Audio goes through `cpal` (CoreAudio /
-ALSA / WASAPI) and OS media controls through `souvlaki`.
-
-**Linux** needs a couple of system dev packages for audio (ALSA) and media controls
-(D-Bus / MPRIS):
-
-```sh
-# Debian/Ubuntu
-sudo apt install libasound2-dev libdbus-1-dev pkg-config
-# Fedora
-sudo dnf install alsa-lib-devel dbus-devel pkgconf-pkg-config
-```
-
-**macOS / Windows** need no extra packages — just a Rust toolchain.
-
-Media-control integration per platform:
-- **macOS** — Now Playing in Control Center / lock screen + media keys
-- **Linux** — MPRIS (controllable from your desktop's media widgets; needs a D-Bus session)
-- **Windows** — System Media Transport Controls (uses the console window)
-
-If the OS controls can't initialise, Orbit just runs without them — playback is unaffected.
-
-## Install globally
-
-Install straight from the repo (anyone with a Rust toolchain):
-
-```sh
-cargo install --git https://github.com/sihooleebd/orbit
-```
-
-Or build and install from a local clone:
-
-```sh
-cargo install --path . --root ~/.local
-```
-
-This puts the binary at `~/.local/bin/orbit`. Make sure that directory is on your
-`PATH` (it is on most setups); otherwise add to your shell profile:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-`cargo install` copies a snapshot, so after changing the code re-run it with
-`--force` to update the global command:
-
-```sh
-cargo install --path . --root ~/.local --force
-```
-
-Prefer it to track your latest build automatically? Symlink instead of installing
-(re-pointed on every `cargo build --release`, but breaks if you move the project):
-
-```sh
-ln -sf "$(pwd)/target/release/orbit" ~/.local/bin/orbit
-```
-
-On **Windows**, just `cargo install --path .` — it lands in `%USERPROFILE%\.cargo\bin`,
-which is already on your `PATH`, so you can run `orbit` from any terminal.
-
-State lives under your platform data dir (`~/Library/Application Support/orbit`
-on macOS): `config.json`, `buckets.json`, `library.json`.
+On first launch Orbit adopts your **Music** folder if it exists; press `A` to manage
+library folders and `R` to rescan. Config, buckets, and the library cache live under
+your platform data dir (`~/Library/Application Support/orbit` on macOS).
 
 ## Screenshots
 
-The three-pane overview — library (browsable by folder), buckets (smart + your own), and the queue:
+The three-pane overview — library, buckets, and the queue:
 
 <p align="center"><img src="assets/overview.png" width="760" alt="Overview"></p>
 
@@ -112,7 +62,7 @@ Zen mode (`z`) — full-screen player with two visualizers you flip between with
   </tr>
 </table>
 
-The equalizer (`e`) — gain response line over the live spectrum, with presets · and the About card (`i`):
+The equalizer (`e`) and the About card (`i`):
 
 <table>
   <tr>
@@ -142,118 +92,48 @@ Ten built-in palettes — press `t` for a live picker:
     <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br>Gruvbox</td>
   </tr>
   <tr>
-    <td></td>
     <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
+    <td></td>
     <td></td>
   </tr>
 </table>
 
-## Layout
-
-```
- ◈ ORBIT · local music                              1234 tracks  EQ:on
-╭ ♪ LIBRARY ────────────╮╭ ◆ BUCKETS ──────╮╭ ≡ QUEUE (12) ───────────╮
-│▌ Nightcall — Kavinsky ││▌ ◆ Late Night  3││  ♪ Track — Artist   3:21│
-│  Resonance — Home     ││  ◆ Focus      18││  Track Two — Artist 4:05│
-│  ...                  ││  ...            ││  ...                    │
-╰───────────────────────╯╰─────────────────╯╰─────────────────────────╯
-╭─────────────────────────────────────────────────────────────────────╮
-│ ▶ Kavinsky — Nightcall                                       OutRun │
-│ 1:23 ━━━━━━●────────────────────────────────────────────────── 4:18 │
-│ vol ▰▰▰▰▰▰▱▱▱▱  80%   shuffle:on · repeat:all · EQ:on               │
-╰─────────────────────────────────────────────────────────────────────╯
-```
-
 ## Keys
 
-**Navigate** — `Tab`/`⇧Tab` cycle panes · `↑↓`/`j k` move · `g`/`G` top/bottom · `/` search ·
-`Enter` open folder · `⌫` up a folder (Library)
+**Navigate** — `Tab` panes · `↑↓`/`j k` move · `Enter` open folder / play · `⌫` up · `/` search · `g`/`G` top/bottom
 
-**Playback** — `Enter` play track / dump bucket / play queue item · `Space` pause ·
-`n`/`p` next/prev · `←→`/`h l` seek ∓5s · `+`/`-` volume · `s` shuffle · `r` repeat
+**Playback** — `Space` pause · `n`/`p` next/prev · `←→` seek · `+`/`-` volume · `s` shuffle · `r` repeat
 
-**Buckets & queue** — `b` new bucket · `S` save queue as a bucket · `a` add track to a
-bucket · `o` open bucket (edit) · `d` dump bucket / whole library → queue · `x` delete
-bucket / remove queue item · `c` clear queue
+**Buckets** — `b` new · `S` save queue · `a` add track · `o` open/edit · `d` dump · `x` delete/remove · `c` clear queue
 
-**Media keys** — your keyboard's play/pause, next, and previous keys control Orbit,
-and the current track shows in the system Now Playing panel (Control Center on macOS).
+**Library & EQ** — `A` folders · `R` rescan · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `t` theme · `i` about · `?` help · `q` quit
 
-**Themes** — `t` opens a theme picker with live preview (Synthwave · Nord · Matrix ·
-Solarized · Ember · Dracula · Tokyo Night · Catppuccin · Gruvbox · Rosé Pine). Your
-choice is saved across sessions.
+## Features
 
-### Living buckets
+- **Buckets** — name playlists and `d`-dump them into the queue. `o` opens one to
+  play, remove, reorder, or rename tracks; `S` saves the current queue as a bucket;
+  each gets its own accent colour.
 
-Buckets are alive, not just static lists:
-- **Smart buckets** (shown in italic with `↻ ★ ◷` icons) fill themselves — **Recently
-  Added** (by file date), **Most Played**, and **Recently Played** (from play stats
-  Orbit records as you listen). They can be dumped like any bucket but not deleted.
-- **Save the queue as a bucket** with `S` — crystallize the current orbit.
-- Each bucket gets its own **accent colour**.
-- Focus the Buckets pane and it **splits top/bottom**, previewing the tracks in the
-  highlighted bucket below the list.
-- **Edit a bucket** with `o`: open it to play, **remove** tracks (`x`), **reorder**
-  them (`K`/`J`), or **rename** the bucket (`r`). Smart buckets open read-only.
+- **Smart buckets** — auto-filled *Recently Added*, *Most Played*, and *Recently
+  Played*, built from play stats Orbit keeps as you listen.
 
-**Library & EQ** — `A` manage folders · `R` rescan · `e` open equalizer · `E` toggle EQ on/off · `z` zen mode · `i` about · `?` help · `q` quit
+- **Folder browsing** — the library navigates by folder (`Enter` / `⌫`); `/` searches
+  everything; `A` opens a built-in folder picker to add or remove roots.
 
-### Manage folders (`A`)
+- **Equalizer** (`e`) — a real RBJ-biquad 10-band EQ drawn FabFilter-style: a response
+  line over a live spectrum, with five presets and a pre-amp. Turns on the moment you
+  touch it; settings persist.
 
-A hub for your library roots: it lists every watched folder and lets you
-`a` add one · `x` remove the selected one (rescans automatically) · `r` rescan ·
-`Esc` close.
+- **Zen mode** (`z`) — full-screen player with synced `.lrc` lyrics and two
+  visualizers (`v`): a live audio spectrum or an animated cassette deck.
 
-Adding opens a built-in directory explorer (musikcube-style) — no typing paths.
-`↑↓` move · `Enter`/`→` open a folder · `⌫`/`←` go up · `.` toggle hidden folders ·
-`a` add the highlighted folder (or the current one when `..` is selected) · `Esc`
-back. A line at the bottom always shows exactly what `a` will add.
+- **Themes** (`t`) — ten palettes with a live preview picker, saved across sessions.
 
-### Zen mode (`z`)
+- **OS integration** — hardware media keys and the system Now Playing panel
+  (Control Center / MPRIS / SMTC).
 
-Hides every panel and shows only the player full-screen, with **synced lyrics** if a
-matching `.lrc` sidecar exists (previous/current/next line, current highlighted).
-Press `v` to switch the visualizer:
-
-- **Spectrum** — a live 10-bar analyzer driven by the actual audio through band-pass
-  filters at the same frequencies as the EQ.
-- **Cassette** — an animated tape deck whose reels spin with playback (and stop when
-  paused) while the tape fills with your progress.
-
-`space`/`n`/`p`/`←→`/`e` all still work; `z` or `Esc` returns to the full view.
-
-```
-                      ◈ ORBIT
-
-                Kavinsky — Nightcall
-                      OutRun
-
-              █        █              █
-        █     █     █  █     █        █     █
-        █  █  █  █  █  █  █  █  █  █  █  █  █
-        █  █  █  █  █  █  █  █  █  █  █  █  █
-
-        1:23 ━━━━━━●──────────────────── 4:18
-         vol ▰▰▰▰▰▱▱▱ · shuffle · repeat · EQ
-```
-
-### Equalizer (`e`)
-
-`←→` select band · `↑↓` adjust ∓1 dB · `x` enable/bypass · `f` flat reset ·
-`1`–`5` presets (Flat, Bass Boost, Treble, Vocal, Loudness) · `Esc` close.
-
-The EQ turns **on automatically** the moment you adjust a band or pick a preset, so
-you don't have to remember to enable it. You can also toggle it from anywhere with
-`E`, or with `x` inside the panel. The title bar shows `ON` / `BYPASSED`.
-
-The EQ is drawn FabFilter-style: your gain settings are a **connected response
-line** over a **live spectrum** of the playing audio, so you can see exactly which
-frequencies you're shaping as you shape them. The rightmost node is a **pre-amp** to
-tame clipping when boosting many bands. Settings persist across sessions.
-
-### About (`i`)
-
-Shows Orbit's logo, version, and author in a popup. Press any key to dismiss.
+- **Safe & resilient** — confirmation prompts before destructive actions, and
+  automatic recovery if the audio device changes mid-song.
 
 ## License
 
