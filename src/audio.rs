@@ -470,7 +470,7 @@ pub const PRESETS: &[Preset] = &[
 
 pub struct Engine {
     // Kept alive for the duration of playback; dropping stops audio.
-    _device: MixerDeviceSink,
+    device: MixerDeviceSink,
     player: Player,
     eq: Arc<EqShared>,
     volume: f32,
@@ -486,7 +486,7 @@ impl Engine {
         let player = Player::connect_new(&device.mixer());
         player.set_volume(volume);
         Ok(Self {
-            _device: device,
+            device,
             player,
             eq,
             volume,
@@ -498,6 +498,33 @@ impl Engine {
         &self.eq
     }
 
+    /// A fresh player attached to the current device, replacing the old one.
+    ///
+    /// We never call `Player::clear()` / `stop()` to swap tracks: those block on
+    /// the audio thread draining, which never happens if the output device has
+    /// been pulled (e.g. unplugging headphones) — hanging the whole app. Dropping
+    /// a `Player` and connecting a new one is non-blocking.
+    fn replace_player(&mut self) {
+        self.player = Player::connect_new(&self.device.mixer());
+        self.player.set_volume(self.volume);
+    }
+
+    /// Reopen the default output device (e.g. after it changed) and a fresh
+    /// player. Returns false if no device could be opened.
+    pub fn rebuild_output(&mut self) -> bool {
+        match DeviceSinkBuilder::open_default_sink() {
+            Ok(mut device) => {
+                device.log_on_drop(false);
+                let player = Player::connect_new(&device.mixer());
+                player.set_volume(self.volume);
+                self.device = device; // drops the old (dead) stream
+                self.player = player;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Decode `path`, wrap it in the equalizer, and start playing it now.
     pub fn play_path(&mut self, path: &Path) -> Result<()> {
         let file = File::open(path).map_err(|e| anyhow!("open {path:?}: {e}"))?;
@@ -505,8 +532,8 @@ impl Engine {
         self.current_total = decoder.total_duration();
         let source = Equalizer::new(decoder, self.eq.clone());
 
-        // Replace whatever was playing.
-        self.player.clear();
+        // Replace whatever was playing (non-blocking — see replace_player).
+        self.replace_player();
         self.player.append(source);
         self.player.play();
         Ok(())
@@ -530,7 +557,7 @@ impl Engine {
     }
 
     pub fn stop(&mut self) {
-        self.player.clear();
+        self.replace_player();
         self.current_total = None;
     }
 

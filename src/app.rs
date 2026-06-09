@@ -220,6 +220,9 @@ pub struct App {
     pub now_playing: Option<Track>,
     expect_playing: bool,
     seen_progress: bool,
+    /// Watchdog: detect a stalled output device (e.g. unplugged headphones).
+    last_pos: Duration,
+    stall_ticks: u32,
 
     scan_rx: Option<Receiver<Track>>,
     pub scanning: bool,
@@ -297,6 +300,8 @@ impl App {
             now_playing: None,
             expect_playing: false,
             seen_progress: false,
+            last_pos: Duration::ZERO,
+            stall_ticks: 0,
             scan_rx: None,
             scanning: false,
             scan_count: 0,
@@ -490,6 +495,31 @@ impl App {
             }
         }
 
+        // Watchdog: if playback is running but the position has been frozen for
+        // ~1.2s, the output device likely changed (e.g. headphones unplugged).
+        // Rebuild onto the current default device and resume where we were.
+        const STALL_LIMIT: u32 = 24; // ~24 * 50ms
+        if self.expect_playing
+            && self.seen_progress
+            && !self.engine.is_paused()
+            && !self.engine.is_finished()
+        {
+            let pos = self.engine.position();
+            if pos == self.last_pos {
+                self.stall_ticks += 1;
+            } else {
+                self.stall_ticks = 0;
+                self.last_pos = pos;
+            }
+            if self.stall_ticks >= STALL_LIMIT {
+                self.stall_ticks = 0;
+                self.recover_audio_device();
+            }
+        } else {
+            self.stall_ticks = 0;
+            self.last_pos = self.engine.position();
+        }
+
         // Let the spectrum fall when nothing is actively playing.
         if self.now_playing.is_none() || self.engine.is_paused() {
             self.engine.eq().decay_levels(0.80);
@@ -497,6 +527,25 @@ impl App {
 
         // Apply any OS media-control commands (media keys / Now Playing).
         self.process_remote();
+    }
+
+    /// The output device stalled (likely changed). Reopen it and resume.
+    fn recover_audio_device(&mut self) {
+        let resume_at = self.last_pos;
+        if !self.engine.rebuild_output() {
+            self.set_error("Lost the audio output device.");
+            self.expect_playing = false;
+            return;
+        }
+        if let Some(track) = self.now_playing.clone() {
+            if self.engine.play_path(&track.path).is_ok() {
+                self.engine.seek(resume_at);
+                self.seen_progress = false;
+                self.last_pos = resume_at;
+                self.update_remote();
+                self.set_status("Audio device changed — resumed playback.");
+            }
+        }
     }
 
     fn on_track_finished(&mut self) {
@@ -597,6 +646,8 @@ impl App {
                 self.update_media();
                 self.expect_playing = true;
                 self.seen_progress = false;
+                self.last_pos = Duration::ZERO;
+                self.stall_ticks = 0;
                 self.sync_queue_selection();
                 self.update_remote();
             }
