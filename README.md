@@ -142,8 +142,8 @@ Ten built-in palettes — press `t` for a live picker:
     <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br>Gruvbox</td>
   </tr>
   <tr>
-    <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
     <td></td>
+    <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
     <td></td>
   </tr>
 </table>
