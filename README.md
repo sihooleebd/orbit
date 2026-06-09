@@ -19,21 +19,50 @@ and the system Now Playing panel.
 
 ## Screenshots
 
-The three-pane overview — library, buckets (smart + your own), and the queue:
+The three-pane overview — library (browsable by folder), buckets (smart + your own), and the queue:
 
-![Overview](assets/overview.png)
+<p align="center"><img src="assets/overview.png" width="760" alt="Overview"></p>
 
-Zen mode (`z`) — full-screen player with a live spectrum analyzer driven by the audio:
+Zen mode (`z`) — full-screen player with two visualizers you flip between with `v`:
 
-![Zen mode](assets/zen.png)
+<p align="center">
+  <img src="assets/zen-cassette.png" width="420" alt="Zen — cassette">
+  <img src="assets/zen-spectrum.png" width="420" alt="Zen — spectrum">
+</p>
 
-The equalizer (`e`) — gain bars over the live spectrum, with presets:
+The equalizer (`e`) — gain response line over the live spectrum, with presets · and the About card (`i`):
 
-![Equalizer](assets/equalizer.png)
+<p align="center">
+  <img src="assets/equalizer.png" width="420" alt="Equalizer">
+  <img src="assets/about.png" width="420" alt="About">
+</p>
 
-The built-in folder browser for managing your library:
+### Themes
 
-![Folder browser](assets/file-browser.png)
+Ten built-in palettes — press `t` for a live picker:
+
+<table>
+  <tr>
+    <td align="center"><img src="assets/themes/synthwave.png" width="260"><br>Synthwave</td>
+    <td align="center"><img src="assets/themes/nord.png" width="260"><br>Nord</td>
+    <td align="center"><img src="assets/themes/matrix.png" width="260"><br>Matrix</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/themes/solarized.png" width="260"><br>Solarized</td>
+    <td align="center"><img src="assets/themes/ember.png" width="260"><br>Ember</td>
+    <td align="center"><img src="assets/themes/dracula.png" width="260"><br>Dracula</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/themes/tokyo-night.png" width="260"><br>Tokyo Night</td>
+    <td align="center"><img src="assets/themes/catppuccin.png" width="260"><br>Catppuccin</td>
+    <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br>Gruvbox</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
 
 ## Run
 
