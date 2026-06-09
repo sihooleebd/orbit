@@ -76,7 +76,13 @@ If the OS controls can't initialise, Orbit just runs without them — playback i
 
 ## Install globally
 
-Build and install the binary so you can launch it from anywhere by typing `orbit`:
+Install straight from the repo (anyone with a Rust toolchain):
+
+```sh
+cargo install --git https://github.com/sihooleebd/orbit
+```
+
+Or build and install from a local clone:
 
 ```sh
 cargo install --path . --root ~/.local
