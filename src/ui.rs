@@ -48,6 +48,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::BucketView(row) => draw_bucket_view(f, area, app, *row),
         Mode::About => draw_about(f, area),
         Mode::Confirm { prompt, .. } => draw_confirm(f, area, prompt),
+        Mode::ThemePicker { .. } => draw_theme_picker(f, area, app),
         Mode::Normal => {}
     }
 }
@@ -114,6 +115,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
         Mode::About => "press any key to close",
         Mode::Confirm { .. } => "y confirm · n / Esc cancel",
+        Mode::ThemePicker { .. } => "↑↓ preview · Enter apply · Esc cancel",
         Mode::Normal => {
             "Tab panes · Enter play · Space pause · n/p · ←→ seek · e EQ · z zen · b bucket · a add · ? help"
         }
@@ -1169,7 +1171,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::from(vec![key("E"), desc("toggle EQ on/off")]),
         Line::from(vec![key("z"), desc("zen mode (full-screen player)")]),
         Line::from(vec![key("v"), desc("cycle zen visualizer (spectrum / cassette)")]),
-        Line::from(vec![key("t"), desc("cycle colour theme")]),
+        Line::from(vec![key("t"), desc("theme picker")]),
         Line::from(vec![key("i"), desc("about Orbit")]),
         Line::from(vec![key("q"), desc("quit")]),
     ];
@@ -1250,6 +1252,41 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
         .highlight_symbol("▌ ")
         .style(Style::new().bg(theme::panel_bg()));
     f.render_stateful_widget(list, rows[1], &mut app.pick_state);
+}
+
+fn draw_theme_picker(f: &mut Frame, area: Rect, app: &mut App) {
+    let count = theme::palette_count();
+    let rect = centered_rect(38, (count as u16 + 4).min(area.height), area);
+    f.render_widget(Clear, rect);
+    let block = overlay_block("THEME");
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let items: Vec<ListItem> = (0..count)
+        .map(|i| {
+            let p = theme::palette_at(i);
+            // A little swatch of the palette's key colours.
+            let swatch = [p.accent, p.accent2, p.violet, p.gold, p.green];
+            let mut spans: Vec<Span> = vec![Span::styled(
+                format!(" {:<12}", p.name),
+                Style::new().fg(theme::fg()),
+            )];
+            for c in swatch {
+                spans.push(Span::styled("▆", Style::new().fg(c)));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::new()
+                .bg(theme::select_bg())
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▌ ")
+        .style(Style::new().bg(theme::panel_bg()));
+    f.render_stateful_widget(list, inner, &mut app.theme_state);
 }
 
 fn draw_confirm(f: &mut Frame, area: Rect, prompt: &str) {

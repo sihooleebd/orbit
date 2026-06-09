@@ -133,6 +133,8 @@ pub enum Mode {
     About,
     /// A yes/no confirmation for a destructive action.
     Confirm { prompt: String, action: ConfirmAction },
+    /// Live theme picker; `original` is restored on cancel.
+    ThemePicker { original: usize },
 }
 
 
@@ -245,6 +247,8 @@ pub struct App {
     pub folders_state: ListState,
     /// Selection state for the bucket detail view.
     pub bucket_view_state: ListState,
+    /// Selection state for the theme picker.
+    pub theme_state: ListState,
 
     /// Synced lyrics for the current track, if a .lrc sidecar exists.
     pub lyrics: Option<crate::media::Lyrics>,
@@ -315,6 +319,7 @@ impl App {
             fs_state: ListState::default(),
             folders_state: ListState::default(),
             bucket_view_state: ListState::default(),
+            theme_state: ListState::default(),
             lyrics: None,
             remote: crate::remote::Remote::new(),
         };
@@ -1070,6 +1075,48 @@ impl App {
         self.set_status("Queue cleared.");
     }
 
+    // -- theme picker ------------------------------------------------------
+
+    fn open_theme_picker(&mut self) {
+        let original = crate::theme::active_index();
+        self.theme_state.select(Some(original));
+        self.mode = Mode::ThemePicker { original };
+        self.set_status("Pick a theme — ↑↓ preview, Enter apply, Esc cancel.");
+    }
+
+    fn handle_theme_picker_key(&mut self, key: KeyEvent) {
+        let original = match &self.mode {
+            Mode::ThemePicker { original } => *original,
+            _ => return,
+        };
+        let count = crate::theme::palette_count();
+        let cur = self.theme_state.selected().unwrap_or(0);
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                let next = if cur == 0 { count - 1 } else { cur - 1 };
+                self.theme_state.select(Some(next));
+                crate::theme::set_palette(next); // live preview
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let next = (cur + 1) % count;
+                self.theme_state.select(Some(next));
+                crate::theme::set_palette(next); // live preview
+            }
+            KeyCode::Enter => {
+                crate::theme::set_palette(cur);
+                self.config.palette = cur;
+                self.config.save().ok();
+                self.mode = Mode::Normal;
+                self.set_status(format!("Theme: {}", crate::theme::palette_name()));
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                crate::theme::set_palette(original); // revert
+                self.mode = Mode::Normal;
+            }
+            _ => {}
+        }
+    }
+
     // -- confirmation ------------------------------------------------------
 
     fn confirm(&mut self, prompt: String, action: ConfirmAction) {
@@ -1402,6 +1449,7 @@ impl App {
             Mode::BucketView(_) => self.handle_bucket_view_key(key),
             Mode::About => self.mode = Mode::Normal,
             Mode::Confirm { .. } => self.handle_confirm_key(key),
+            Mode::ThemePicker { .. } => self.handle_theme_picker_key(key),
             Mode::Normal => self.handle_normal_key(key),
         }
     }
@@ -1411,6 +1459,7 @@ impl App {
             return;
         };
         match key.code {
+            
             KeyCode::Esc => {
                 // Cancel; if it was a live search, clear the filter.
                 if matches!(input.kind, InputKind::Search) {
@@ -1633,12 +1682,7 @@ impl App {
                 self.config.save().ok();
                 self.set_status(format!("Zen visualizer: {}", self.zen_viz.label()));
             }
-            KeyCode::Char('t') => {
-                let idx = crate::theme::cycle();
-                self.config.palette = idx;
-                self.config.save().ok();
-                self.set_status(format!("Theme: {}", crate::theme::palette_name()));
-            }
+            KeyCode::Char('t') => self.open_theme_picker(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('i') => self.mode = Mode::About,
             _ => {}
@@ -1699,12 +1743,7 @@ impl App {
                     "Zen mode off."
                 });
             }
-            KeyCode::Char('t') => {
-                let idx = crate::theme::cycle();
-                self.config.palette = idx;
-                self.config.save().ok();
-                self.set_status(format!("Theme: {}", crate::theme::palette_name()));
-            }
+            KeyCode::Char('t') => self.open_theme_picker(),
             KeyCode::Char('v') => {
                 self.zen_viz = self.zen_viz.next();
                 self.config.zen_viz = self.zen_viz.as_usize();

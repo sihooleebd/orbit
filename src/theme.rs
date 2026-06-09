@@ -117,6 +117,96 @@ pub const PALETTES: &[Palette] = &[
         error: Color::Rgb(240, 100, 90),
         select_bg: Color::Rgb(48, 34, 28),
     },
+    // 5 — Dracula.
+    Palette {
+        name: "Dracula",
+        bg: Color::Rgb(40, 42, 54),
+        panel_bg: Color::Rgb(33, 34, 44),
+        fg: Color::Rgb(248, 248, 242),
+        dim: Color::Rgb(98, 114, 164),
+        faint: Color::Rgb(68, 71, 90),
+        border: Color::Rgb(68, 71, 90),
+        border_focus: Color::Rgb(139, 233, 253),
+        accent: Color::Rgb(139, 233, 253),
+        accent2: Color::Rgb(255, 121, 198),
+        violet: Color::Rgb(189, 147, 249),
+        gold: Color::Rgb(241, 250, 140),
+        green: Color::Rgb(80, 250, 123),
+        error: Color::Rgb(255, 85, 85),
+        select_bg: Color::Rgb(68, 71, 90),
+    },
+    // 6 — Tokyo Night.
+    Palette {
+        name: "Tokyo Night",
+        bg: Color::Rgb(26, 27, 38),
+        panel_bg: Color::Rgb(31, 32, 46),
+        fg: Color::Rgb(192, 202, 245),
+        dim: Color::Rgb(86, 95, 137),
+        faint: Color::Rgb(54, 58, 79),
+        border: Color::Rgb(41, 46, 66),
+        border_focus: Color::Rgb(122, 162, 247),
+        accent: Color::Rgb(125, 207, 255),
+        accent2: Color::Rgb(247, 118, 142),
+        violet: Color::Rgb(187, 154, 247),
+        gold: Color::Rgb(224, 175, 104),
+        green: Color::Rgb(158, 206, 106),
+        error: Color::Rgb(247, 118, 142),
+        select_bg: Color::Rgb(41, 46, 66),
+    },
+    // 7 — Catppuccin Mocha.
+    Palette {
+        name: "Catppuccin",
+        bg: Color::Rgb(30, 30, 46),
+        panel_bg: Color::Rgb(24, 24, 37),
+        fg: Color::Rgb(205, 214, 244),
+        dim: Color::Rgb(127, 132, 156),
+        faint: Color::Rgb(69, 71, 90),
+        border: Color::Rgb(49, 50, 68),
+        border_focus: Color::Rgb(137, 180, 250),
+        accent: Color::Rgb(137, 220, 235),
+        accent2: Color::Rgb(245, 194, 231),
+        violet: Color::Rgb(203, 166, 247),
+        gold: Color::Rgb(249, 226, 175),
+        green: Color::Rgb(166, 227, 161),
+        error: Color::Rgb(243, 139, 168),
+        select_bg: Color::Rgb(49, 50, 68),
+    },
+    // 8 — Gruvbox.
+    Palette {
+        name: "Gruvbox",
+        bg: Color::Rgb(40, 40, 40),
+        panel_bg: Color::Rgb(50, 48, 47),
+        fg: Color::Rgb(235, 219, 178),
+        dim: Color::Rgb(168, 153, 132),
+        faint: Color::Rgb(102, 92, 84),
+        border: Color::Rgb(80, 73, 69),
+        border_focus: Color::Rgb(250, 189, 47),
+        accent: Color::Rgb(142, 192, 124),
+        accent2: Color::Rgb(211, 134, 155),
+        violet: Color::Rgb(211, 134, 155),
+        gold: Color::Rgb(250, 189, 47),
+        green: Color::Rgb(184, 187, 38),
+        error: Color::Rgb(251, 73, 52),
+        select_bg: Color::Rgb(60, 56, 54),
+    },
+    // 9 — Rosé Pine.
+    Palette {
+        name: "Rosé Pine",
+        bg: Color::Rgb(25, 23, 36),
+        panel_bg: Color::Rgb(31, 29, 46),
+        fg: Color::Rgb(224, 222, 244),
+        dim: Color::Rgb(110, 106, 134),
+        faint: Color::Rgb(64, 61, 82),
+        border: Color::Rgb(38, 35, 58),
+        border_focus: Color::Rgb(156, 207, 216),
+        accent: Color::Rgb(156, 207, 216),
+        accent2: Color::Rgb(235, 188, 186),
+        violet: Color::Rgb(196, 167, 231),
+        gold: Color::Rgb(246, 193, 119),
+        green: Color::Rgb(62, 143, 176),
+        error: Color::Rgb(235, 111, 146),
+        select_bg: Color::Rgb(33, 32, 46),
+    },
 ];
 
 /// Index of the active palette.
@@ -130,19 +220,20 @@ pub fn active_index() -> usize {
     *ACTIVE.read().unwrap()
 }
 
-/// Advance to the next palette and return its index.
-pub fn cycle() -> usize {
-    let next = (active_index() + 1) % PALETTES.len();
-    set_palette(next);
-    next
-}
-
 pub fn current() -> Palette {
     PALETTES[active_index() % PALETTES.len()]
 }
 
 pub fn palette_name() -> &'static str {
     current().name
+}
+
+pub fn palette_count() -> usize {
+    PALETTES.len()
+}
+
+pub fn palette_at(idx: usize) -> Palette {
+    PALETTES[idx % PALETTES.len()]
 }
 
 // -- accessors ---------------------------------------------------------------

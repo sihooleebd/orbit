@@ -146,7 +146,9 @@ bucket / remove queue item · `c` clear queue
 **Media keys** — your keyboard's play/pause, next, and previous keys control Orbit,
 and the current track shows in the system Now Playing panel (Control Center on macOS).
 
-**Themes** — `t` cycles colour palettes (Synthwave · Nord · Matrix · Solarized · Ember), saved across sessions.
+**Themes** — `t` opens a theme picker with live preview (Synthwave · Nord · Matrix ·
+Solarized · Ember · Dracula · Tokyo Night · Catppuccin · Gruvbox · Rosé Pine). Your
+choice is saved across sessions.
 
 ### Living buckets
 
