@@ -78,30 +78,30 @@ The equalizer (`e`) and the About card (`i`):
 
 Ten built-in palettes — open **Settings** (`,`) → **Theme** for a live picker:
 
-<table>
+<table width="100%">
   <tr>
-    <td align="center"><img src="assets/themes/synthwave.png" width="260"></td>
-    <td align="center"><img src="assets/themes/nord.png" width="260"></td>
-    <td align="center"><img src="assets/themes/matrix.png" width="260"></td>
-    <td align="center"><img src="assets/themes/solarized.png" width="260"></td>
-    <td align="center"><img src="assets/themes/ember.png" width="260"></td>
-    <td align="center"><img src="assets/themes/dracula.png" width="260"></td>
-    <td align="center"><img src="assets/themes/tokyo-night.png" width="260"></td>
-    <td align="center"><img src="assets/themes/catppuccin.png" width="260"></td>
-    <td align="center"><img src="assets/themes/gruvbox.png" width="260"></td>
-    <td align="center"><img src="assets/themes/rose-pine.png" width="260"></td>
+    <td align="center" width="10%"><img src="assets/themes/synthwave.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/nord.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/matrix.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/solarized.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/ember.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/dracula.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/tokyo-night.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/catppuccin.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/gruvbox.png" width="100%"></td>
+    <td align="center" width="10%"><img src="assets/themes/rose-pine.png" width="100%"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Synthwave</sub></td>
-    <td align="center"><sub>Nord</sub></td>
-    <td align="center"><sub>Matrix</sub></td>
-    <td align="center"><sub>Solarized</sub></td>
-    <td align="center"><sub>Ember</sub></td>
-    <td align="center"><sub>Dracula</sub></td>
-    <td align="center"><sub>Tokyo Night</sub></td>
-    <td align="center"><sub>Catppuccin</sub></td>
-    <td align="center"><sub>Gruvbox</sub></td>
-    <td align="center"><sub>Rosé Pine</sub></td>
+    <td align="center" width="10%"><sub>Synthwave</sub></td>
+    <td align="center" width="10%"><sub>Nord</sub></td>
+    <td align="center" width="10%"><sub>Matrix</sub></td>
+    <td align="center" width="10%"><sub>Solarized</sub></td>
+    <td align="center" width="10%"><sub>Ember</sub></td>
+    <td align="center" width="10%"><sub>Dracula</sub></td>
+    <td align="center" width="10%"><sub>Tokyo Night</sub></td>
+    <td align="center" width="10%"><sub>Catppuccin</sub></td>
+    <td align="center" width="10%"><sub>Gruvbox</sub></td>
+    <td align="center" width="10%"><sub>Rosé Pine</sub></td>
   </tr>
 </table>
 
