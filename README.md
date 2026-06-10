@@ -113,7 +113,7 @@ Ten built-in palettes — open **Settings** (`,`) → **Theme** for a live picke
 
 **Buckets** — `b` new · `S` save queue · `a` add track · `o` open/edit · `m` radio (similar) · `d` dump · `x` delete/remove · `c` clear queue
 
-**Player & more** — `A` folders · `R` rescan · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `,` settings · `i` about · `?` help · `q` quit
+**Player & more** — `A` folders · `R` rescan · `D` download (yt-dlp) · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `,` settings · `i` about · `?` help · `q` quit
 
 ## Features
 
@@ -132,6 +132,11 @@ Ten built-in palettes — open **Settings** (`,`) → **Theme** for a live picke
 
 - **Folder browsing** — the library navigates by folder (`Enter` / `⌫`); `/` searches
   everything; `A` opens a built-in folder picker to add or remove roots.
+
+- **Download** (`D`) — paste a URL, pick a download root and folder name, and Orbit
+  fetches the audio as mp3 in the background via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+  (with embedded metadata + cover art), then auto-tracks the folder and rescans. Requires
+  `yt-dlp` on your `PATH`; the key is inert without it.
 
 - **Equalizer** (`e`) — a real RBJ-biquad 10-band EQ drawn FabFilter-style: a response
   line over a live spectrum, with five presets and a pre-amp. Turns on the moment you

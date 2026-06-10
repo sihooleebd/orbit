@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, BucketRow, Focus, InputKind, Mode};
+use crate::app::{App, BrowserPurpose, BucketRow, Focus, InputKind, Mode};
 use crate::audio::{BAND_LABELS, NUM_BANDS, PRESETS};
 use crate::model::fmt_duration;
 use crate::theme;
@@ -82,6 +82,15 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(theme::violet()),
         ));
     }
+    if app.downloading {
+        let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+        let label = if app.download_total > 0 {
+            format!("{frame} ⬇ {}/{} ", app.download_done, app.download_total)
+        } else {
+            format!("{frame} ⬇ downloading ")
+        };
+        right.push(Span::styled(label, Style::new().fg(theme::accent2())));
+    }
     if app.scanning {
         let frame = SPINNER[app.spinner_frame % SPINNER.len()];
         right.push(Span::styled(
@@ -115,7 +124,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         Mode::Help => "↑↓ scroll · Esc close",
         Mode::Input(_) => "type · Enter confirm · Esc cancel",
         Mode::PickBucket { .. } => "↑↓ pick · n new bucket · Enter add · Esc cancel",
-        Mode::FileBrowser => "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel",
+        Mode::FileBrowser => {
+            if matches!(app.browser_purpose, BrowserPurpose::PickDownloadRoot { .. }) {
+                "↑↓ move · Enter open · ⌫ up · a select folder · . hidden · Esc cancel"
+            } else {
+                "↑↓ move · Enter open · ⌫ up · a add folder · . hidden · Esc cancel"
+            }
+        }
         Mode::ManageFolders => "↑↓ move · a add · x remove · r rescan · Esc close",
         Mode::BucketView(_) => "↑↓ move · Enter play · x remove · K/J reorder · r rename · Esc back",
         Mode::About => "press any key to close",
@@ -1173,6 +1188,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         head("LIBRARY"),
         Line::from(vec![key("A"), desc("manage library folders")]),
         Line::from(vec![key("R"), desc("rescan")]),
+        Line::from(vec![key("D"), desc("download audio (yt-dlp) to a folder")]),
         Line::from(""),
         head("PLAYER"),
         Line::from(vec![key("z"), desc("zen mode (full-screen player)")]),
@@ -1214,6 +1230,8 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         InputKind::NewBucket | InputKind::NewBucketForTrack(_) => "NEW BUCKET",
         InputKind::SaveQueueAsBucket => "SAVE QUEUE AS BUCKET",
         InputKind::RenameBucket(_) => "RENAME BUCKET",
+        InputKind::DownloadUrl => "DOWNLOAD — URL",
+        InputKind::DownloadFolder { .. } => "DOWNLOAD — FOLDER NAME",
     };
     let rect = centered_rect(54, 3, area);
     f.render_widget(Clear, rect);
@@ -1578,9 +1596,11 @@ fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
     let rect = centered_rect(74, 24, area);
     f.render_widget(Clear, rect);
 
+    let downloading = matches!(app.browser_purpose, BrowserPurpose::PickDownloadRoot { .. });
     let path_str = b.dir.display().to_string();
-    let title_w = rect.width.saturating_sub(14) as usize;
-    let block = overlay_block(&format!("ADD FOLDER · {}", truncate(&path_str, title_w)));
+    let title_w = rect.width.saturating_sub(16) as usize;
+    let title_verb = if downloading { "DOWNLOAD INTO" } else { "ADD FOLDER" };
+    let block = overlay_block(&format!("{title_verb} · {}", truncate(&path_str, title_w)));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
@@ -1610,8 +1630,13 @@ fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
     }
 
     if items.is_empty() {
+        let empty = if downloading {
+            "(no sub-folders — press 'a' to download into this folder)"
+        } else {
+            "(no sub-folders — press 'a' to add this folder)"
+        };
         f.render_widget(
-            Paragraph::new("(no sub-folders — press 'a' to add this folder)")
+            Paragraph::new(empty)
                 .style(Style::new().fg(theme::dim()).bg(theme::panel_bg())),
             rows[0],
         );
@@ -1635,8 +1660,9 @@ fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
     } else {
         b.path_at(idx).unwrap_or_else(|| b.dir.clone())
     };
+    let verb = if downloading { " a downloads into " } else { " a adds " };
     let hint = Line::from(vec![
-        Span::styled(" a adds ", Style::new().fg(theme::dim())),
+        Span::styled(verb, Style::new().fg(theme::dim())),
         Span::styled("▸ ", Style::new().fg(theme::gold())),
         Span::styled(
             truncate(&target.display().to_string(), inner_w.saturating_sub(10)),

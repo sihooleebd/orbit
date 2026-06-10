@@ -175,6 +175,10 @@ pub enum InputKind {
     SaveQueueAsBucket,
     /// Rename an existing user bucket (by index).
     RenameBucket(usize),
+    /// Step 1 of the downloader: the URL to fetch.
+    DownloadUrl,
+    /// Step 3 of the downloader: the subfolder name, carrying the chosen url + root.
+    DownloadFolder { url: String, root: PathBuf },
 }
 
 /// An auto-generated, read-only bucket derived from the library + play stats.
@@ -228,6 +232,15 @@ pub enum Mode {
 
 
 /// A directory browser for picking a library folder (musikcube-style).
+/// Why the file browser is open — determines what the commit key does.
+#[derive(Clone)]
+pub enum BrowserPurpose {
+    /// Add the chosen folder as a library root (the `A` flow).
+    AddRoot,
+    /// Pick the chosen folder as a download root, then prompt for a subfolder.
+    PickDownloadRoot { url: String },
+}
+
 pub struct FileBrowser {
     pub dir: PathBuf,
     /// Sub-directories of `dir`, sorted case-insensitively.
@@ -322,6 +335,15 @@ pub struct App {
     pub scanning: bool,
     pub scan_count: usize,
 
+    /// Active yt-dlp download (background worker).
+    download_rx: Option<Receiver<crate::download::DownloadMsg>>,
+    pub downloading: bool,
+    /// Playlist progress for the header (`done`/`total`; total 0 = unknown).
+    pub download_done: usize,
+    pub download_total: usize,
+    /// Destination folder to track + rescan once the download succeeds.
+    download_dest: Option<PathBuf>,
+
     pub status: String,
     pub status_is_error: bool,
     /// Ticks since the status was last set (for auto-clearing to a default).
@@ -341,6 +363,8 @@ pub struct App {
 
     /// Active directory browser (when in `Mode::FileBrowser`).
     pub browser: Option<FileBrowser>,
+    /// What committing in the browser does.
+    pub browser_purpose: BrowserPurpose,
     pub fs_state: ListState,
     /// Selection state for the Manage Folders overlay.
     pub folders_state: ListState,
@@ -419,6 +443,11 @@ impl App {
             scan_rx: None,
             scanning: false,
             scan_count: 0,
+            download_rx: None,
+            downloading: false,
+            download_done: 0,
+            download_total: 0,
+            download_dest: None,
             status: String::new(),
             status_is_error: false,
             status_age: 0,
@@ -429,6 +458,7 @@ impl App {
             zen_viz: ZenViz::from_usize(config_zen_viz),
             radio_scope: RadioScope::from_usize(config_radio_scope),
             browser: None,
+            browser_purpose: BrowserPurpose::AddRoot,
             fs_state: ListState::default(),
             folders_state: ListState::default(),
             bucket_view_state: ListState::default(),
@@ -776,6 +806,44 @@ impl App {
                 self.analyze_rx = None;
                 self.features.save();
                 self.recompute_smart(); // populate the Radio bucket
+            }
+        }
+
+        // Drain the yt-dlp download worker.
+        let mut dl_finished: Option<bool> = None;
+        if let Some(rx) = &self.download_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(crate::download::DownloadMsg::Progress { done, total }) => {
+                        self.download_done = done as usize;
+                        self.download_total = total as usize;
+                    }
+                    Ok(crate::download::DownloadMsg::Done { ok }) => {
+                        dl_finished = Some(ok);
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        dl_finished = Some(false);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(ok) = dl_finished {
+            self.downloading = false;
+            self.download_rx = None;
+            let dest = self.download_dest.take();
+            if ok {
+                if let Some(dir) = dest {
+                    self.add_root(dir); // ignored if a parent root already covers it
+                    self.start_scan();
+                    self.set_status("⬇ Download complete — added to library.");
+                } else {
+                    self.set_status("⬇ Download complete.");
+                }
+            } else {
+                self.set_error("Download failed.");
             }
         }
 
@@ -1593,9 +1661,22 @@ impl App {
         let start = self.config.roots.last().cloned().unwrap_or_else(|| home.clone());
         let start = if start.is_dir() { start } else { home };
         self.browser = Some(FileBrowser::load(start, false));
+        self.browser_purpose = BrowserPurpose::AddRoot;
         self.fs_state.select(Some(0));
         self.mode = Mode::FileBrowser;
         self.set_status("Browse to a folder, then press 'a' to add it.");
+    }
+
+    /// Open the browser to pick a download root for the given URL.
+    fn open_download_browser(&mut self, url: String) {
+        let home = config::home_dir();
+        let start = self.config.roots.last().cloned().unwrap_or_else(|| home.clone());
+        let start = if start.is_dir() { start } else { home };
+        self.browser = Some(FileBrowser::load(start, false));
+        self.browser_purpose = BrowserPurpose::PickDownloadRoot { url };
+        self.fs_state.select(Some(0));
+        self.mode = Mode::FileBrowser;
+        self.set_status("Select a folder to download into, then press 'a'.");
     }
 
     fn browser_navigate_to(&mut self, dir: PathBuf, select_child: Option<PathBuf>) {
@@ -1657,7 +1738,7 @@ impl App {
     fn browser_add(&mut self) {
         let Some(b) = &self.browser else { return };
         let idx = self.fs_state.selected().unwrap_or(0);
-        // ".." adds the current directory; otherwise add the highlighted folder.
+        // ".." chooses the current directory; otherwise the highlighted folder.
         let path = if b.is_parent_row(idx) {
             b.dir.clone()
         } else {
@@ -1667,17 +1748,31 @@ impl App {
             }
         };
         self.browser = None;
-        self.add_root(path.clone());
-        // Return to the folder manager with the (new) root selected.
-        self.mode = Mode::ManageFolders;
-        if !self.config.roots.is_empty() {
-            let sel = self
-                .config
-                .roots
-                .iter()
-                .position(|r| *r == path)
-                .unwrap_or(self.config.roots.len() - 1);
-            self.folders_state.select(Some(sel));
+
+        match self.browser_purpose.clone() {
+            BrowserPurpose::PickDownloadRoot { url } => {
+                // Got the download root — now name the subfolder (existing or new).
+                let status = format!("Sel/Cre folder inside {}", path.display());
+                self.mode = Mode::Input(Input {
+                    kind: InputKind::DownloadFolder { url, root: path },
+                    buffer: String::new(),
+                });
+                self.set_status(status);
+            }
+            BrowserPurpose::AddRoot => {
+                self.add_root(path.clone());
+                // Return to the folder manager with the (new) root selected.
+                self.mode = Mode::ManageFolders;
+                if !self.config.roots.is_empty() {
+                    let sel = self
+                        .config
+                        .roots
+                        .iter()
+                        .position(|r| *r == path)
+                        .unwrap_or(self.config.roots.len() - 1);
+                    self.folders_state.select(Some(sel));
+                }
+            }
         }
     }
 
@@ -1920,14 +2015,47 @@ impl App {
                 self.store.save();
                 self.set_status(format!("Renamed to “{buffer}”."));
             }
+            InputKind::DownloadUrl => {
+                if buffer.is_empty() {
+                    self.set_status("URL cannot be empty.");
+                    return;
+                }
+                // Next step: choose where it lands.
+                self.open_download_browser(buffer);
+            }
+            InputKind::DownloadFolder { url, root } => {
+                if buffer.is_empty() {
+                    self.set_status("Folder name cannot be empty.");
+                    return;
+                }
+                self.start_download(url, root, buffer);
+            }
         }
+    }
+
+    /// Kick off a background yt-dlp download into `<root>/<subfolder>`.
+    fn start_download(&mut self, url: String, root: PathBuf, subfolder: String) {
+        if self.downloading {
+            self.set_status("A download is already in progress.");
+            return;
+        }
+        let dest = root.join(&subfolder);
+        self.download_dest = Some(dest);
+        self.download_rx = Some(crate::download::spawn_download(root, subfolder, url));
+        self.downloading = true;
+        self.download_done = 0;
+        self.download_total = 0;
+        self.set_status("⬇ Download started.");
     }
 
     fn handle_browser_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
                 self.browser = None;
-                self.mode = Mode::ManageFolders;
+                self.mode = match self.browser_purpose {
+                    BrowserPurpose::PickDownloadRoot { .. } => Mode::Normal,
+                    BrowserPurpose::AddRoot => Mode::ManageFolders,
+                };
             }
             KeyCode::Up | KeyCode::Char('k') => self.browser_move(-1),
             KeyCode::Down | KeyCode::Char('j') => self.browser_move(1),
@@ -2224,6 +2352,17 @@ impl App {
             }
             KeyCode::Char('m') => self.play_similar(),
             KeyCode::Char('A') => self.open_manage_folders(),
+            KeyCode::Char('D') => {
+                if crate::download::yt_dlp_available() {
+                    self.mode = Mode::Input(Input {
+                        kind: InputKind::DownloadUrl,
+                        buffer: String::new(),
+                    });
+                    self.set_status("Paste a URL to download as mp3:");
+                } else {
+                    self.set_error("yt-dlp not found — install it to download.");
+                }
+            }
             KeyCode::Char('/') => {
                 self.mode = Mode::Input(Input {
                     kind: InputKind::Search,

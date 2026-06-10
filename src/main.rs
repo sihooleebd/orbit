@@ -5,6 +5,7 @@ mod app;
 mod audio;
 mod bucket;
 mod config;
+mod download;
 mod library;
 mod media;
 mod model;
