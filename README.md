@@ -80,16 +80,16 @@ Ten built-in palettes — open **Settings** (`,`) → **Theme** for a live picke
 
 <table>
   <tr>
-    <td align="center"><img src="assets/themes/synthwave.png" width="260"><br>Synthwave</td>
-    <td align="center"><img src="assets/themes/nord.png" width="260"><br>Nord</td>
-    <td align="center"><img src="assets/themes/matrix.png" width="260"><br>Matrix</td>
-    <td align="center"><img src="assets/themes/solarized.png" width="260"><br>Solarized</td>
-    <td align="center"><img src="assets/themes/ember.png" width="260"><br>Ember</td>
-    <td align="center"><img src="assets/themes/dracula.png" width="260"><br>Dracula</td>
-    <td align="center"><img src="assets/themes/tokyo-night.png" width="260"><br>Tokyo Night</td>
-    <td align="center"><img src="assets/themes/catppuccin.png" width="260"><br>Catppuccin</td>
-    <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br>Gruvbox</td>
-    <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
+    <td align="center"><img src="assets/themes/synthwave.png" width="260"><br><sub>Synthwave</sub></td>
+    <td align="center"><img src="assets/themes/nord.png" width="260"><br><sub>Nord</sub></td>
+    <td align="center"><img src="assets/themes/matrix.png" width="260"><br><sub>Matrix</sub></td>
+    <td align="center"><img src="assets/themes/solarized.png" width="260"><br><sub>Solarized</sub></td>
+    <td align="center"><img src="assets/themes/ember.png" width="260"><br><sub>Ember</sub></td>
+    <td align="center"><img src="assets/themes/dracula.png" width="260"><br><sub>Dracula</sub></td>
+    <td align="center"><img src="assets/themes/tokyo-night.png" width="260"><br><sub>Tokyo Night</sub></td>
+    <td align="center"><img src="assets/themes/catppuccin.png" width="260"><br><sub>Catppuccin</sub></td>
+    <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br><sub>Gruvbox</sub></td>
+    <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br><sub>Rosé Pine</sub></td>
   </tr>
 </table>
 
