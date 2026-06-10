@@ -33,8 +33,8 @@ impl Remote {
         let config = PlatformConfig {
             display_name: "Orbit",
             dbus_name: "orbit",
-            // Windows SMTC needs a window handle; use the console window.
-            hwnd: console_hwnd(),
+            // Windows SMTC needs a window handle.
+            hwnd: smtc_hwnd(),
         };
         let mut controls = MediaControls::new(config).ok()?;
         let (tx, rx) = mpsc::channel();
@@ -112,22 +112,33 @@ fn pump_runloop() {
     }
 }
 
+// On Windows, souvlaki services SMTC button events via the window message loop
+// of the HWND passed in PlatformConfig. A TUI blocked on terminal input is not
+// pumping messages, so media-key delivery may be limited under some hosts. This
+// path is best-effort and untested (no Windows dev machine); it degrades to
+// "no Now Playing" rather than breaking. Left as a no-op on non-macOS.
 #[cfg(not(target_os = "macos"))]
 fn pump_runloop() {}
 
-/// The console window handle, needed by Windows SMTC.
+/// A usable window handle for Windows SMTC. `GetConsoleWindow()` returns NULL
+/// under Windows Terminal / VS Code / any ConPTY host, so fall back to the
+/// foreground window. Returns None if neither is available (SMTC is then skipped).
 #[cfg(windows)]
-fn console_hwnd() -> Option<*mut c_void> {
+fn smtc_hwnd() -> Option<*mut c_void> {
     use windows_sys::Win32::System::Console::GetConsoleWindow;
-    let h = unsafe { GetConsoleWindow() } as *mut c_void;
-    if h.is_null() {
-        None
-    } else {
-        Some(h)
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    let console = unsafe { GetConsoleWindow() } as *mut c_void;
+    if !console.is_null() {
+        return Some(console);
     }
+    let foreground = unsafe { GetForegroundWindow() } as *mut c_void;
+    if !foreground.is_null() {
+        return Some(foreground);
+    }
+    None
 }
 
 #[cfg(not(windows))]
-fn console_hwnd() -> Option<*mut c_void> {
+fn smtc_hwnd() -> Option<*mut c_void> {
     None
 }

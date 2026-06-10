@@ -8,6 +8,7 @@ mod config;
 mod library;
 mod media;
 mod model;
+mod platform;
 mod queue;
 mod remote;
 mod stats;

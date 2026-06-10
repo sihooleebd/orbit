@@ -14,6 +14,153 @@ use anyhow::{anyhow, Result};
 use rodio::source::SeekError;
 use rodio::{ChannelCount, Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate, Source};
 
+/// Outcome of inspecting a `cpal::StreamError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthEvent {
+    /// Real device loss — the stream must be rebuilt.
+    DeviceLost,
+    /// A transient glitch (XRUN). NOT a device change — never triggers recovery.
+    Underrun,
+    /// Backend-specific or unknown — logged/counted, no recovery.
+    Backend,
+}
+
+/// Classify a cpal stream error into a recovery-relevant event.
+pub fn classify(err: &rodio::cpal::StreamError) -> HealthEvent {
+    use rodio::cpal::StreamError;
+    match err {
+        StreamError::DeviceNotAvailable | StreamError::StreamInvalidated => HealthEvent::DeviceLost,
+        StreamError::BufferUnderrun => HealthEvent::Underrun,
+        // BackendSpecific and any future variants.
+        _ => HealthEvent::Backend,
+    }
+}
+
+/// Lock-free device-health signal. Written by the cpal error callback (on the
+/// audio thread), read by the engine on the UI thread. Atomics only — no locks,
+/// no allocation — so it is safe to touch from the realtime callback.
+pub struct DeviceHealth {
+    lost: AtomicBool,
+    underruns: AtomicU32,
+    backend_errors: AtomicU32,
+}
+
+impl DeviceHealth {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            lost: AtomicBool::new(false),
+            underruns: AtomicU32::new(0),
+            backend_errors: AtomicU32::new(0),
+        })
+    }
+
+    /// Record a stream error (called from the cpal error callback).
+    pub fn record(&self, err: &rodio::cpal::StreamError) {
+        match classify(err) {
+            HealthEvent::DeviceLost => self.lost.store(true, Ordering::Release),
+            HealthEvent::Underrun => {
+                self.underruns.fetch_add(1, Ordering::Relaxed);
+            }
+            HealthEvent::Backend => {
+                self.backend_errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Read-and-clear the device-lost flag.
+    pub fn take_lost(&self) -> bool {
+        self.lost.swap(false, Ordering::AcqRel)
+    }
+}
+
+/// What the engine should do this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchAction {
+    /// Nothing to do.
+    None,
+    /// Rebuild the output device and resume playback in place.
+    Rebuild,
+    /// Recovery has failed repeatedly — stop trying, surface an error.
+    GiveUp,
+}
+
+/// Pure recovery policy. No I/O: the engine feeds it events/ticks and acts on the
+/// returned `WatchAction`, which makes the whole policy unit-testable without hardware.
+pub struct DeviceWatch {
+    tuning: crate::platform::PlatformTuning,
+    stall_ticks: u32,
+    last_pos: Duration,
+    failed_rebuilds: u32,
+    /// Ticks remaining in the post-rebuild debounce window.
+    cooldown: u32,
+}
+
+impl DeviceWatch {
+    pub fn new(tuning: crate::platform::PlatformTuning) -> Self {
+        Self {
+            tuning,
+            stall_ticks: 0,
+            last_pos: Duration::ZERO,
+            failed_rebuilds: 0,
+            cooldown: 0,
+        }
+    }
+
+    /// Reset per-track stall tracking (call when a new source starts). Keeps the
+    /// failed-rebuild counter so the cap still applies across a recovery replay.
+    pub fn reset(&mut self) {
+        self.stall_ticks = 0;
+        self.last_pos = Duration::ZERO;
+    }
+
+    /// A Tier-1 device-loss event was observed this tick.
+    pub fn on_lost(&mut self) -> WatchAction {
+        if self.cooldown > 0 {
+            // Debounce: a single physical event can surface multiple errors.
+            return WatchAction::None;
+        }
+        self.issue_rebuild()
+    }
+
+    /// Per-tick update with current playback state. `pos` is the engine position.
+    pub fn on_tick(&mut self, pos: Duration, playing: bool, analyzing: bool) -> WatchAction {
+        if self.cooldown > 0 {
+            self.cooldown -= 1;
+        }
+        if !playing {
+            self.stall_ticks = 0;
+            self.last_pos = pos;
+            return WatchAction::None;
+        }
+        if pos > self.last_pos {
+            // Real progress — healthy.
+            self.stall_ticks = 0;
+            self.failed_rebuilds = 0;
+            self.last_pos = pos;
+            return WatchAction::None;
+        }
+        // No progress. Tier-2 heuristic (Linux only), suppressed during analysis
+        // and during the post-rebuild cooldown.
+        if self.tuning.heuristic_enabled && !analyzing && self.cooldown == 0 {
+            self.stall_ticks += 1;
+            if self.stall_ticks >= self.tuning.stall_limit_ticks {
+                return self.issue_rebuild();
+            }
+        }
+        WatchAction::None
+    }
+
+    fn issue_rebuild(&mut self) -> WatchAction {
+        if self.failed_rebuilds >= self.tuning.rebuild_cap {
+            return WatchAction::GiveUp;
+        }
+        self.failed_rebuilds += 1;
+        self.cooldown = self.tuning.rebuild_window_ticks;
+        self.stall_ticks = 0;
+        WatchAction::Rebuild
+    }
+}
+
 pub const NUM_BANDS: usize = 10;
 
 /// Centre frequencies for the graphic EQ (octave-spaced, Hz).
@@ -476,13 +623,29 @@ pub struct Engine {
     volume: f32,
     /// Duration of the source currently appended (from metadata or decoder).
     current_total: Option<Duration>,
+    /// Lock-free signal fed by the cpal error callback.
+    health: Arc<DeviceHealth>,
+    /// Pure recovery policy.
+    watch: DeviceWatch,
+}
+
+/// Open the default output device with our error callback wired to `health`.
+fn open_device(health: Arc<DeviceHealth>) -> Result<MixerDeviceSink> {
+    let h = health;
+    let builder = DeviceSinkBuilder::from_default_device()
+        .map_err(|e| anyhow!("no audio output device: {e}"))?
+        .with_error_callback(move |err: rodio::cpal::StreamError| h.record(&err));
+    let mut device = builder
+        .open_sink_or_fallback()
+        .map_err(|e| anyhow!("could not open audio output: {e}"))?;
+    device.log_on_drop(false);
+    Ok(device)
 }
 
 impl Engine {
     pub fn new(volume: f32, eq: Arc<EqShared>) -> Result<Self> {
-        let mut device = DeviceSinkBuilder::open_default_sink()
-            .map_err(|e| anyhow!("could not open audio output: {e}"))?;
-        device.log_on_drop(false);
+        let health = DeviceHealth::new();
+        let device = open_device(health.clone())?;
         let player = Player::connect_new(&device.mixer());
         player.set_volume(volume);
         Ok(Self {
@@ -491,6 +654,8 @@ impl Engine {
             eq,
             volume,
             current_total: None,
+            health,
+            watch: DeviceWatch::new(crate::platform::tuning()),
         })
     }
 
@@ -512,17 +677,34 @@ impl Engine {
     /// Reopen the default output device (e.g. after it changed) and a fresh
     /// player. Returns false if no device could be opened.
     pub fn rebuild_output(&mut self) -> bool {
-        match DeviceSinkBuilder::open_default_sink() {
-            Ok(mut device) => {
-                device.log_on_drop(false);
+        match open_device(self.health.clone()) {
+            Ok(device) => {
                 let player = Player::connect_new(&device.mixer());
                 player.set_volume(self.volume);
                 self.device = device; // drops the old (dead) stream
                 self.player = player;
+                self.health.take_lost(); // clear any stale flag from the dead device
                 true
             }
             Err(_) => false,
         }
+    }
+
+    /// Drive the recovery state machine for one tick and return the action the
+    /// app should take. `playing` = a source is actively producing audio;
+    /// `analyzing` = the background recommender is decoding (suppresses the
+    /// Linux stall heuristic so it can't false-positive on CPU starvation).
+    pub fn poll_health(&mut self, playing: bool, analyzing: bool) -> WatchAction {
+        // Tier 1: real device-loss event from cpal.
+        if self.health.take_lost() {
+            match self.watch.on_lost() {
+                WatchAction::None => {}
+                other => return other,
+            }
+        }
+        // Tier 2: position-stall heuristic (Linux only, gated inside DeviceWatch).
+        let pos = self.position();
+        self.watch.on_tick(pos, playing, analyzing)
     }
 
     /// Decode `path`, wrap it in the equalizer, and start playing it now.
@@ -534,6 +716,7 @@ impl Engine {
 
         // Replace whatever was playing (non-blocking — see replace_player).
         self.replace_player();
+        self.watch.reset();
         self.player.append(source);
         self.player.play();
         Ok(())
@@ -660,5 +843,118 @@ mod tests {
         assert!((eq.gain_db(0) - MAX_GAIN_DB).abs() < 1e-3);
         eq.set_gain_db(0, -999.0);
         assert!((eq.gain_db(0) + MAX_GAIN_DB).abs() < 1e-3);
+    }
+
+    #[test]
+    fn classify_maps_stream_errors() {
+        use rodio::cpal::StreamError;
+        assert_eq!(classify(&StreamError::DeviceNotAvailable), HealthEvent::DeviceLost);
+        assert_eq!(classify(&StreamError::StreamInvalidated), HealthEvent::DeviceLost);
+        assert_eq!(classify(&StreamError::BufferUnderrun), HealthEvent::Underrun);
+        let backend = StreamError::BackendSpecific {
+            err: rodio::cpal::BackendSpecificError { description: "boom".into() },
+        };
+        assert_eq!(classify(&backend), HealthEvent::Backend);
+    }
+
+    #[test]
+    fn device_health_records_and_takes_lost() {
+        use rodio::cpal::StreamError;
+        let h = DeviceHealth::new();
+        assert!(!h.take_lost(), "fresh health is not lost");
+        h.record(&StreamError::BufferUnderrun);
+        assert!(!h.take_lost(), "underrun must not set lost");
+        h.record(&StreamError::DeviceNotAvailable);
+        assert!(h.take_lost(), "device-lost event sets the flag");
+        assert!(!h.take_lost(), "take_lost clears the flag");
+    }
+
+    fn linux_tuning() -> crate::platform::PlatformTuning {
+        crate::platform::PlatformTuning {
+            heuristic_enabled: true,
+            stall_limit_ticks: 3,
+            rebuild_cap: 2,
+            rebuild_window_ticks: 2,
+        }
+    }
+
+    fn mac_tuning() -> crate::platform::PlatformTuning {
+        crate::platform::PlatformTuning { heuristic_enabled: false, ..linux_tuning() }
+    }
+
+    const Z: Duration = Duration::ZERO;
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn event_triggers_rebuild() {
+        let mut w = DeviceWatch::new(mac_tuning());
+        assert_eq!(w.on_lost(), WatchAction::Rebuild);
+    }
+
+    #[test]
+    fn repeated_failures_give_up_at_cap() {
+        let mut w = DeviceWatch::new(mac_tuning()); // rebuild_cap = 2
+        assert_eq!(w.on_lost(), WatchAction::Rebuild); // attempt 1
+        // Drain the post-rebuild debounce window so the next event counts.
+        w.on_tick(Z, false, false);
+        w.on_tick(Z, false, false);
+        assert_eq!(w.on_lost(), WatchAction::Rebuild); // attempt 2
+        w.on_tick(Z, false, false);
+        w.on_tick(Z, false, false);
+        assert_eq!(w.on_lost(), WatchAction::GiveUp); // cap reached
+    }
+
+    #[test]
+    fn progress_resets_failure_count() {
+        let mut w = DeviceWatch::new(mac_tuning());
+        assert_eq!(w.on_lost(), WatchAction::Rebuild);
+        // Playback resumes and advances — healthy again.
+        w.on_tick(ms(100), true, false);
+        w.on_tick(ms(200), true, false);
+        // A later event should rebuild again, not give up.
+        for _ in 0..3 {
+            w.on_tick(ms(200), false, false);
+        }
+        assert_eq!(w.on_lost(), WatchAction::Rebuild);
+    }
+
+    #[test]
+    fn linux_stall_triggers_rebuild() {
+        let mut w = DeviceWatch::new(linux_tuning()); // stall_limit_ticks = 3
+        // First establish a baseline position, then freeze it.
+        assert_eq!(w.on_tick(ms(500), true, false), WatchAction::None);
+        assert_eq!(w.on_tick(ms(500), true, false), WatchAction::None); // stall 1
+        assert_eq!(w.on_tick(ms(500), true, false), WatchAction::None); // stall 2
+        assert_eq!(w.on_tick(ms(500), true, false), WatchAction::Rebuild); // stall 3 == limit
+    }
+
+    #[test]
+    fn linux_stall_suppressed_while_analyzing() {
+        let mut w = DeviceWatch::new(linux_tuning());
+        w.on_tick(ms(500), true, false);
+        for _ in 0..10 {
+            assert_eq!(w.on_tick(ms(500), true, /*analyzing=*/ true), WatchAction::None);
+        }
+    }
+
+    #[test]
+    fn macos_stall_never_triggers_rebuild() {
+        let mut w = DeviceWatch::new(mac_tuning()); // heuristic disabled
+        w.on_tick(ms(500), true, false);
+        for _ in 0..20 {
+            assert_eq!(w.on_tick(ms(500), true, false), WatchAction::None);
+        }
+    }
+
+    #[test]
+    fn reset_clears_stall_but_not_failures() {
+        let mut w = DeviceWatch::new(linux_tuning());
+        assert_eq!(w.on_lost(), WatchAction::Rebuild); // failed_rebuilds = 1
+        w.reset(); // new track starts at position 0
+        // A fresh track at pos 0 must not be read as an instant stall.
+        assert_eq!(w.on_tick(Z, true, false), WatchAction::None);
+        assert_eq!(w.on_tick(ms(50), true, false), WatchAction::None);
     }
 }

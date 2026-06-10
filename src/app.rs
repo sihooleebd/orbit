@@ -8,6 +8,7 @@ use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
 
+use crate::audio;
 use crate::audio::{Engine, EqShared, MAX_GAIN_DB, NUM_BANDS, PRESETS};
 use crate::bucket::BucketStore;
 use crate::config::{self, Config};
@@ -316,9 +317,6 @@ pub struct App {
     pub now_playing: Option<Track>,
     expect_playing: bool,
     seen_progress: bool,
-    /// Watchdog: detect a stalled output device (e.g. unplugged headphones).
-    last_pos: Duration,
-    stall_ticks: u32,
 
     scan_rx: Option<Receiver<Track>>,
     pub scanning: bool,
@@ -418,8 +416,6 @@ impl App {
             now_playing: None,
             expect_playing: false,
             seen_progress: false,
-            last_pos: Duration::ZERO,
-            stall_ticks: 0,
             scan_rx: None,
             scanning: false,
             scan_count: 0,
@@ -793,29 +789,20 @@ impl App {
             }
         }
 
-        // Watchdog: if playback is running but the position has been frozen for
-        // ~1.2s, the output device likely changed (e.g. headphones unplugged).
-        // Rebuild onto the current default device and resume where we were.
-        const STALL_LIMIT: u32 = 24; // ~24 * 50ms
-        if self.expect_playing
-            && self.seen_progress
-            && !self.engine.is_paused()
-            && !self.engine.is_finished()
-        {
-            let pos = self.engine.position();
-            if pos == self.last_pos {
-                self.stall_ticks += 1;
-            } else {
-                self.stall_ticks = 0;
-                self.last_pos = pos;
+        // Device-loss recovery: Tier-1 cpal events (all platforms) + a Linux-only
+        // position-stall fallback, both driven by the engine's DeviceWatch.
+        if self.expect_playing {
+            let playing =
+                self.seen_progress && !self.engine.is_paused() && !self.engine.is_finished();
+            let analyzing = self.analyze_rx.is_some();
+            match self.engine.poll_health(playing, analyzing) {
+                audio::WatchAction::None => {}
+                audio::WatchAction::Rebuild => self.recover_audio_device(),
+                audio::WatchAction::GiveUp => {
+                    self.set_error("Output device unavailable.");
+                    self.expect_playing = false;
+                }
             }
-            if self.stall_ticks >= STALL_LIMIT {
-                self.stall_ticks = 0;
-                self.recover_audio_device();
-            }
-        } else {
-            self.stall_ticks = 0;
-            self.last_pos = self.engine.position();
         }
 
         // Let the spectrum fall when nothing is actively playing.
@@ -858,7 +845,7 @@ impl App {
 
     /// The output device stalled (likely changed). Reopen it and resume.
     fn recover_audio_device(&mut self) {
-        let resume_at = self.last_pos;
+        let resume_at = self.engine.position();
         if !self.engine.rebuild_output() {
             self.set_error("Lost the audio output device.");
             self.expect_playing = false;
@@ -868,7 +855,6 @@ impl App {
             if self.engine.play_path(&track.path).is_ok() {
                 self.engine.seek(resume_at);
                 self.seen_progress = false;
-                self.last_pos = resume_at;
                 self.update_remote();
                 self.set_status("Audio device changed — resumed playback.");
             }
@@ -986,8 +972,6 @@ impl App {
                 self.update_media();
                 self.expect_playing = true;
                 self.seen_progress = false;
-                self.last_pos = Duration::ZERO;
-                self.stall_ticks = 0;
                 self.sync_queue_selection();
                 self.update_remote();
             }

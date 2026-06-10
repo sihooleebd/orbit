@@ -8,9 +8,12 @@
 
 # ◈ Orbit
 
-A beautiful local **music player TUI** — playlists you call **buckets** and dump into
-the queue, a real-time **10-band graphic equalizer**, and a full-screen zen mode.
-Plays MP3, FLAC, WAV, OGG, M4A/MP4, and AAC.
+A beautiful **music player for your terminal** that makes a local library feel alive. Only the good stuff from streaming services, but the music is yours. 
+Organise tracks into **buckets** you dump into the queue, sculpt the sound with a real
+**10-band equalizer**, drift off in a full-screen **zen mode**, and let Orbit spin up a
+**radio of similar songs** — recommendations from listening to the audio itself, fully
+offline, no accounts, nothing leaves your machine. Plays MP3, FLAC, WAV, OGG, M4A/MP4,
+and AAC.
 
 Built in Rust with [ratatui](https://ratatui.rs) and
 [rodio](https://github.com/RustAudio/rodio). Runs on macOS, Linux, and Windows, with
@@ -73,28 +76,20 @@ The equalizer (`e`) and the About card (`i`):
 
 ### Themes
 
-Ten built-in palettes — press `t` for a live picker:
+Ten built-in palettes — open **Settings** (`,`) → **Theme** for a live picker:
 
 <table>
   <tr>
     <td align="center"><img src="assets/themes/synthwave.png" width="260"><br>Synthwave</td>
     <td align="center"><img src="assets/themes/nord.png" width="260"><br>Nord</td>
     <td align="center"><img src="assets/themes/matrix.png" width="260"><br>Matrix</td>
-  </tr>
-  <tr>
     <td align="center"><img src="assets/themes/solarized.png" width="260"><br>Solarized</td>
     <td align="center"><img src="assets/themes/ember.png" width="260"><br>Ember</td>
     <td align="center"><img src="assets/themes/dracula.png" width="260"><br>Dracula</td>
-  </tr>
-  <tr>
     <td align="center"><img src="assets/themes/tokyo-night.png" width="260"><br>Tokyo Night</td>
     <td align="center"><img src="assets/themes/catppuccin.png" width="260"><br>Catppuccin</td>
     <td align="center"><img src="assets/themes/gruvbox.png" width="260"><br>Gruvbox</td>
-  </tr>
-  <tr>
     <td align="center"><img src="assets/themes/rose-pine.png" width="260"><br>Rosé Pine</td>
-    <td></td>
-    <td></td>
   </tr>
 </table>
 
@@ -142,7 +137,8 @@ Ten built-in palettes — press `t` for a live picker:
   (Control Center / MPRIS / SMTC).
 
 - **Safe & resilient** — confirmation prompts before destructive actions, and
-  automatic recovery if the audio device changes mid-song.
+  event-driven recovery if the audio output device disappears or changes
+  mid-song (cross-platform, with a Linux-specific fallback for silent reroutes).
 
 ## License
 
