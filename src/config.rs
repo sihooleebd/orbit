@@ -29,6 +29,8 @@ pub struct Config {
     pub zen_viz: usize,
     /// Show the key-hint strip in the footer.
     pub footer_hints: bool,
+    /// Radio recommendation scope: 0 = library, 1 = current folder.
+    pub radio_scope: usize,
 }
 
 impl Default for Config {
@@ -44,6 +46,7 @@ impl Default for Config {
             palette: 0,
             zen_viz: 0,
             footer_hints: true,
+            radio_scope: 0,
         }
     }
 }
@@ -102,6 +105,10 @@ pub fn library_cache_file() -> PathBuf {
 
 pub fn stats_file() -> PathBuf {
     project_dir().join("stats.json")
+}
+
+pub fn features_file() -> PathBuf {
+    project_dir().join("features.json")
 }
 
 /// Default music directory guess for first-run convenience. Uses the OS's

@@ -75,6 +75,11 @@ impl Library {
         self.rebuild_view();
     }
 
+    /// The folder currently being browsed (None at the top level).
+    pub fn cwd(&self) -> Option<&Path> {
+        self.cwd.as_deref()
+    }
+
     /// A short label for the current folder (for the panel title).
     pub fn cwd_label(&self) -> Option<String> {
         self.cwd

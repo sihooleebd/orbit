@@ -1,5 +1,6 @@
 //! Orbit — a local MP3 player TUI with buckets and a real graphic EQ.
 
+mod analyze;
 mod app;
 mod audio;
 mod bucket;

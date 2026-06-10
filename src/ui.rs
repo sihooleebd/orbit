@@ -88,6 +88,12 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
             format!("{frame} scanning {} ", app.scan_count),
             Style::new().fg(theme::gold()),
         ));
+    } else if app.analyzing {
+        let frame = SPINNER[app.spinner_frame % SPINNER.len()];
+        right.push(Span::styled(
+            format!("{frame} analyzing {}/{} ", app.analyze_done, app.analyze_total),
+            Style::new().fg(theme::violet()),
+        ));
     } else {
         right.push(Span::styled(
             format!("{} tracks ", app.library.tracks.len()),
@@ -214,7 +220,7 @@ fn draw_library(f: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .map(|entry| match entry {
             LibEntry::Parent => ListItem::new(Line::from(Span::styled(
-                "⮤  ..",
+                "↑  ..",
                 Style::new().fg(theme::dim()),
             ))),
             LibEntry::Folder { path, count } => {
@@ -1158,6 +1164,7 @@ fn draw_help(f: &mut Frame, area: Rect, app: &mut App) {
         Line::from(vec![key("S"), desc("save current queue as a bucket")]),
         Line::from(vec![key("a"), desc("add track to a bucket")]),
         Line::from(vec![key("o"), desc("open bucket (remove/reorder/rename)")]),
+        Line::from(vec![key("m"), desc("radio — play tracks similar to this one")]),
         Line::from(vec![key("d"), desc("dump bucket / library → queue")]),
         Line::from(vec![key("x"), desc("delete bucket / remove queue item")]),
         Line::from(vec![key("c"), desc("clear queue")]),
@@ -1271,7 +1278,7 @@ fn draw_pick(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_settings(f: &mut Frame, area: Rect, app: &mut App) {
-    let rows: [(&str, String); 5] = [
+    let rows: [(&str, String); 6] = [
         (
             "Equalizer",
             if app.eq().enabled() { "on ›" } else { "bypassed ›" }.to_string(),
@@ -1283,6 +1290,7 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &mut App) {
             if app.config.footer_hints { "on" } else { "off" }.to_string(),
         ),
         ("Sleep timer", app.sleep.label()),
+        ("Radio scope", app.radio_scope.label().to_string()),
     ];
 
     let rect = centered_rect(52, rows.len() as u16 + 4, area);
@@ -1583,7 +1591,7 @@ fn draw_browser(f: &mut Frame, area: Rect, app: &mut App) {
     let mut items: Vec<ListItem> = Vec::new();
     if b.has_parent {
         items.push(ListItem::new(Line::from(Span::styled(
-            "⮤  ..",
+            "↑  ..",
             Style::new().fg(theme::dim()),
         ))));
     }

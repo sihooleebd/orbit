@@ -73,6 +73,42 @@ impl Sleep {
     }
 }
 
+/// Which tracks the radio recommender draws from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadioScope {
+    /// The whole library.
+    Library,
+    /// Only tracks under the folder you're currently browsing.
+    Folder,
+}
+
+impl RadioScope {
+    pub fn from_usize(v: usize) -> Self {
+        match v {
+            1 => RadioScope::Folder,
+            _ => RadioScope::Library,
+        }
+    }
+    pub fn as_usize(self) -> usize {
+        match self {
+            RadioScope::Library => 0,
+            RadioScope::Folder => 1,
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            RadioScope::Library => RadioScope::Folder,
+            RadioScope::Folder => RadioScope::Library,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            RadioScope::Library => "library",
+            RadioScope::Folder => "current folder",
+        }
+    }
+}
+
 /// The zen-mode visualizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZenViz {
@@ -261,6 +297,12 @@ pub struct App {
     pub stats: Stats,
     /// Auto-generated buckets, recomputed when the library or stats change.
     pub smart: Vec<SmartBucket>,
+    /// Cached audio feature vectors for content-based recommendation.
+    pub features: crate::analyze::Features,
+    analyze_rx: Option<Receiver<(PathBuf, Vec<f32>)>>,
+    pub analyzing: bool,
+    pub analyze_done: usize,
+    pub analyze_total: usize,
 
     pub focus: Focus,
     pub mode: Mode,
@@ -296,6 +338,8 @@ pub struct App {
     pub zen: bool,
     /// Which zen visualizer is active.
     pub zen_viz: ZenViz,
+    /// Scope the radio recommender draws candidates from.
+    pub radio_scope: RadioScope,
 
     /// Active directory browser (when in `Mode::FileBrowser`).
     pub browser: Option<FileBrowser>,
@@ -349,6 +393,7 @@ impl App {
         }
 
         let config_zen_viz = config.zen_viz;
+        let config_radio_scope = config.radio_scope;
 
         let mut app = Self {
             config,
@@ -358,6 +403,11 @@ impl App {
             engine,
             stats,
             smart: Vec::new(),
+            features: crate::analyze::Features::load(),
+            analyze_rx: None,
+            analyzing: false,
+            analyze_done: 0,
+            analyze_total: 0,
             focus: Focus::Library,
             mode: Mode::Normal,
             lib_state,
@@ -381,6 +431,7 @@ impl App {
             sleep: Sleep::Off,
             zen: false,
             zen_viz: ZenViz::from_usize(config_zen_viz),
+            radio_scope: RadioScope::from_usize(config_radio_scope),
             browser: None,
             fs_state: ListState::default(),
             folders_state: ListState::default(),
@@ -467,7 +518,141 @@ impl App {
             });
         }
 
+        // Radio — acoustic neighbours of what you've been listening to.
+        if self.features.len() >= 8 {
+            // Seeds: recent + most-played tracks that have features.
+            let mut seeds: Vec<PathBuf> = Vec::new();
+            let mut by_recent: Vec<&Track> = tracks
+                .iter()
+                .filter(|t| self.stats.last_played(&t.path) > 0)
+                .collect();
+            by_recent.sort_by(|a, b| {
+                self.stats
+                    .last_played(&b.path)
+                    .cmp(&self.stats.last_played(&a.path))
+            });
+            for t in by_recent.iter().take(4) {
+                seeds.push(t.path.clone());
+            }
+            let mut by_count: Vec<&Track> =
+                tracks.iter().filter(|t| self.stats.count(&t.path) > 0).collect();
+            by_count.sort_by(|a, b| self.stats.count(&b.path).cmp(&self.stats.count(&a.path)));
+            for t in by_count.iter().take(2) {
+                if !seeds.contains(&t.path) {
+                    seeds.push(t.path.clone());
+                }
+            }
+
+            if !seeds.is_empty() {
+                let candidates = self.radio_candidates();
+                let recs = crate::analyze::recommend(&self.features, &candidates, &seeds, 50);
+                let radio: Vec<Track> = recs
+                    .iter()
+                    .filter_map(|p| tracks.iter().find(|t| &t.path == p).cloned())
+                    .collect();
+                if !radio.is_empty() {
+                    smart.push(SmartBucket {
+                        name: "Radio".into(),
+                        icon: "≈",
+                        color: 2,
+                        tracks: radio,
+                    });
+                }
+            }
+        }
+
         self.smart = smart;
+    }
+
+    /// Begin analysing any library tracks that don't yet have features.
+    fn start_analysis(&mut self) {
+        let missing: Vec<PathBuf> = self
+            .library
+            .tracks
+            .iter()
+            .map(|t| t.path.clone())
+            .filter(|p| !self.features.has(p))
+            .collect();
+        if missing.is_empty() {
+            self.analyzing = false;
+            return;
+        }
+        self.analyze_total = missing.len();
+        self.analyze_done = 0;
+        self.analyzing = true;
+        self.analyze_rx = Some(crate::analyze::spawn_analyze(missing));
+    }
+
+    fn track_by_path(&self, path: &Path) -> Option<Track> {
+        self.library.tracks.iter().find(|t| t.path == *path).cloned()
+    }
+
+    /// When the radio scope is the current folder, the Radio bucket depends on
+    /// where you're browsing — so refresh it on navigation.
+    fn refresh_folder_radio(&mut self) {
+        if self.radio_scope == RadioScope::Folder {
+            self.recompute_smart();
+        }
+    }
+
+    /// Paths the radio recommender may draw from, honouring the scope setting.
+    fn radio_candidates(&self) -> Vec<PathBuf> {
+        match self.radio_scope {
+            RadioScope::Library => self.library.tracks.iter().map(|t| t.path.clone()).collect(),
+            RadioScope::Folder => match self.library.cwd() {
+                Some(dir) => self
+                    .library
+                    .tracks
+                    .iter()
+                    .filter(|t| t.path.starts_with(dir))
+                    .map(|t| t.path.clone())
+                    .collect(),
+                None => self.library.tracks.iter().map(|t| t.path.clone()).collect(),
+            },
+        }
+    }
+
+    /// Build a radio queue of tracks acoustically similar to a seed and play it.
+    fn play_similar(&mut self) {
+        let seed = if self.focus == Focus::Library {
+            self.selected_library_track().map(|t| t.path)
+        } else {
+            self.now_playing.as_ref().map(|t| t.path.clone())
+        }
+        .or_else(|| self.now_playing.as_ref().map(|t| t.path.clone()));
+
+        let Some(seed) = seed else {
+            self.set_status("No track selected to seed a radio from.");
+            return;
+        };
+        if !self.features.has(&seed) {
+            self.set_status("That track hasn't been analysed yet — give it a moment.");
+            return;
+        }
+        let candidates = self.radio_candidates();
+        let recs = crate::analyze::recommend(&self.features, &candidates, &[seed.clone()], 40);
+        if recs.is_empty() {
+            self.set_status("Not enough analysed tracks yet for a radio.");
+            return;
+        }
+        let mut tracks: Vec<Track> = Vec::new();
+        if let Some(t) = self.track_by_path(&seed) {
+            tracks.push(t);
+        }
+        for p in &recs {
+            if let Some(t) = self.track_by_path(p) {
+                tracks.push(t);
+            }
+        }
+        let name = tracks
+            .first()
+            .map(|t| t.artist_title())
+            .unwrap_or_default();
+        self.queue.clear();
+        self.queue.extend(tracks);
+        self.queue.jump_to(0);
+        self.play_current_in_queue();
+        self.set_status(format!("≈ Radio — similar to {name}"));
     }
 
     pub fn smart_len(&self) -> usize {
@@ -563,6 +748,38 @@ impl App {
                     self.bucket_state.select(Some(0));
                 }
                 self.set_status(format!("Library ready — {} tracks.", self.library.tracks.len()));
+                self.start_analysis();
+            }
+        }
+
+        // Drain background audio-analysis results.
+        if self.analyzing {
+            let mut done = false;
+            let mut got = 0;
+            if let Some(rx) = &self.analyze_rx {
+                for _ in 0..6 {
+                    match rx.try_recv() {
+                        Ok((path, vec)) => {
+                            self.features.insert(path, vec);
+                            self.analyze_done += 1;
+                            got += 1;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if got > 0 && self.analyze_done % 20 == 0 {
+                self.features.save(); // periodic checkpoint
+            }
+            if done {
+                self.analyzing = false;
+                self.analyze_rx = None;
+                self.features.save();
+                self.recompute_smart(); // populate the Radio bucket
             }
         }
 
@@ -915,11 +1132,13 @@ impl App {
             Act::Up => {
                 self.library.go_up();
                 self.lib_state.select(Some(0));
+                self.refresh_folder_radio();
             }
             Act::Enter(path) => {
                 self.library.enter(path);
                 self.lib_state
                     .select(if self.library.entries_len() > 0 { Some(0) } else { None });
+                self.refresh_folder_radio();
             }
             Act::Play(track) => self.enqueue_and_play(track),
             Act::None => {}
@@ -1346,6 +1565,9 @@ impl App {
     // -- folders / rescan --------------------------------------------------
 
     /// Add a directory to the library roots and kick off a rescan.
+    ///
+    /// Keeps the root set tidy: a folder already covered by an existing root is
+    /// rejected, and adding a parent of existing roots absorbs (merges) them.
     fn add_root(&mut self, path: PathBuf) {
         if !path.is_dir() {
             self.set_error(format!("Not a directory: {}", path.display()));
@@ -1355,9 +1577,27 @@ impl App {
             self.set_status("Folder already in library.");
             return;
         }
+        // Already inside an existing root? Nothing to do.
+        if let Some(parent) = self.config.roots.iter().find(|r| path.starts_with(r)) {
+            self.set_status(format!("Already covered by {}.", parent.display()));
+            return;
+        }
+        // Absorb any existing roots that sit under the new (parent) folder.
+        let before = self.config.roots.len();
+        self.config.roots.retain(|r| !r.starts_with(&path));
+        let merged = before - self.config.roots.len();
+
         self.config.roots.push(path.clone());
         self.config.save().ok();
-        self.set_status(format!("Added {} — rescanning…", path.display()));
+        if merged > 0 {
+            self.set_status(format!(
+                "Added {} — merged {merged} subfolder{} — rescanning…",
+                path.display(),
+                if merged == 1 { "" } else { "s" }
+            ));
+        } else {
+            self.set_status(format!("Added {} — rescanning…", path.display()));
+        }
         self.start_scan();
     }
 
@@ -1769,7 +2009,7 @@ impl App {
     // -- settings ----------------------------------------------------------
 
     /// Number of rows in the settings panel.
-    pub const SETTINGS_ROWS: usize = 5;
+    pub const SETTINGS_ROWS: usize = 6;
 
     fn cycle_sleep(&mut self) {
         self.engine.restore_volume(); // undo any in-progress fade
@@ -1836,6 +2076,13 @@ impl App {
                 self.config.save().ok();
             }
             4 => self.cycle_sleep(),
+            5 => {
+                self.radio_scope = self.radio_scope.next();
+                self.config.radio_scope = self.radio_scope.as_usize();
+                self.config.save().ok();
+                self.recompute_smart();
+                self.set_status(format!("Radio scope: {}.", self.radio_scope.label()));
+            }
             _ => {}
         }
     }
@@ -1930,6 +2177,7 @@ impl App {
                     self.library.go_up();
                     self.lib_state
                         .select((self.library.entries_len() > 0).then_some(0));
+                    self.refresh_folder_radio();
                 }
             }
             KeyCode::Char(' ') => self.toggle_pause(),
@@ -1990,6 +2238,7 @@ impl App {
                     self.open_bucket_view();
                 }
             }
+            KeyCode::Char('m') => self.play_similar(),
             KeyCode::Char('A') => self.open_manage_folders(),
             KeyCode::Char('/') => {
                 self.mode = Mode::Input(Input {

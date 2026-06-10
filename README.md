@@ -104,7 +104,7 @@ Ten built-in palettes — press `t` for a live picker:
 
 **Playback** — `Space` pause · `n`/`p` next/prev · `←→` seek · `+`/`-` volume · `s` shuffle · `r` repeat
 
-**Buckets** — `b` new · `S` save queue · `a` add track · `o` open/edit · `d` dump · `x` delete/remove · `c` clear queue
+**Buckets** — `b` new · `S` save queue · `a` add track · `o` open/edit · `m` radio (similar) · `d` dump · `x` delete/remove · `c` clear queue
 
 **Player & more** — `A` folders · `R` rescan · `e` EQ · `E` EQ on/off · `z` zen · `v` visualizer · `,` settings · `i` about · `?` help · `q` quit
 
@@ -116,6 +116,12 @@ Ten built-in palettes — press `t` for a live picker:
 
 - **Smart buckets** — auto-filled *Recently Added*, *Most Played*, and *Recently
   Played*, built from play stats Orbit keeps as you listen.
+
+- **Radio / recommendations** — Orbit analyses your library in the background
+  (MFCC timbre fingerprints + spectral features) and suggests acoustically similar
+  music — **100% offline, no accounts**. A `≈ Radio` smart bucket fills itself from
+  what you've been playing, and `m` starts a radio queue from the selected track.
+  Settings let you scope it to your whole **library** or just the **current folder**.
 
 - **Folder browsing** — the library navigates by folder (`Enter` / `⌫`); `/` searches
   everything; `A` opens a built-in folder picker to add or remove roots.
@@ -129,7 +135,8 @@ Ten built-in palettes — press `t` for a live picker:
 
 - **Settings** (`,`) — one hub for the **equalizer**, the **theme** picker (ten
   palettes, live preview, saved), the zen visualizer, a **sleep timer**
-  (15/30/45/60 min or end-of-track, with a fade-out), and a footer-hints toggle.
+  (15/30/45/60 min or end-of-track, with a fade-out), the **radio scope**, and a
+  footer-hints toggle.
 
 - **OS integration** — hardware media keys and the system Now Playing panel
   (Control Center / MPRIS / SMTC).
